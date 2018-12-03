@@ -1,0 +1,10 @@
+[package]
+name = "ossuary"
+version = "0.1.0"
+authors = ["Trevor Bentley"]
+edition = "2018"
+
+[dependencies]
+x25519-dalek = "0.3.0"
+chacha20-poly1305-aead = "0.1.2"
+rand = "0.6.1"
