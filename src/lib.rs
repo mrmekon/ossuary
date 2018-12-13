@@ -17,6 +17,8 @@ use std::convert::TryInto;
 use std::thread;
 use std::net::{TcpListener, TcpStream};
 
+pub mod clib;
+
 //
 // API:
 //  * sock -- TCP data socket
@@ -138,7 +140,7 @@ struct KeyMaterial {
     session: Option<[u8; 32]>,
     nonce: [u8; 12],
 }
-struct ConnectionContext {
+pub struct ConnectionContext {
     state: ConnectionState,
     local_key: KeyMaterial,
     remote_key: Option<KeyMaterial>,
