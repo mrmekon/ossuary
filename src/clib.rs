@@ -37,7 +37,6 @@ pub extern "C" fn ossuary_send_handshake(conn: *mut ConnectionContext, in_buf: *
 
 #[cfg(test)]
 mod tests {
-    use crate::ConnectionContext;
     use std::thread;
     use std::io::{Read,Write};
     use std::net::{TcpListener, TcpStream};
