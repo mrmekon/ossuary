@@ -4,6 +4,20 @@ version = "0.1.0"
 authors = ["Trevor Bentley"]
 edition = "2018"
 
+[lib]
+crate_type = ["lib", "cdylib", "staticlib"]
+
+[profile.release]
+opt-level = "z"
+debug = false
+rpath = false
+lto = true
+debug-assertsion = false
+codegen-units = 1
+panic = 'abort' #'unwind'
+incremental = true
+overflow-checks = false
+
 [dependencies]
 x25519-dalek = "0.3.0"
 chacha20-poly1305-aead = "0.1.2"
