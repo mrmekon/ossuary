@@ -1,3 +1,4 @@
+#![feature(test)]
 #![feature(try_from)]
 
 extern crate x25519_dalek;
@@ -497,6 +498,8 @@ where T: std::ops::DerefMut<Target = U>,
 
 #[cfg(test)]
 mod tests {
+    extern crate test;
+    use test::Bencher;
     use std::thread;
     use std::net::{TcpListener, TcpStream};
     use crate::*;
@@ -549,5 +552,65 @@ mod tests {
         thread::spawn(move || { let _ = server(); });
         let child = thread::spawn(move || { let _ = client(); });
         let _ = child.join();
+    }
+
+    #[bench]
+    fn bench_test(b: &mut Bencher) {
+        let server_thread = thread::spawn(move || {
+            let listener = TcpListener::bind("127.0.0.1:9987").unwrap();
+            let mut server_stream = listener.incoming().next().unwrap().unwrap();
+            let mut server_conn = ConnectionContext::new(true);
+            while crypto_handshake_done(&server_conn) == false {
+                if crypto_send_handshake(&mut server_conn, &mut server_stream) {
+                    crypto_recv_handshake(&mut server_conn, &mut server_stream);
+                }
+            }
+            let mut plaintext = vec!();
+            let mut bytes: u64 = 0;
+            let start = std::time::SystemTime::now();
+            loop {
+                bytes += crypto_recv_data(&mut server_conn,
+                                          &mut server_stream,
+                                          &mut plaintext).unwrap() as u64;
+                if plaintext == [0xde, 0xde, 0xbe, 0xbe] {
+                    if let Ok(dur) = start.elapsed() {
+                        let t = dur.as_secs() as f64
+                            + dur.subsec_nanos() as f64 * 1e-9;
+                        println!("Benchmark done (recv): {} bytes in {:.2} s", bytes, t);
+                        println!("{:.2} MB/s", bytes as f64 / 1024.0 / 1024.0 / t);
+                    }
+                    break;
+                }
+                plaintext.clear();
+            }
+        });
+
+        let mut client_stream = TcpStream::connect("127.0.0.1:9987").unwrap();
+        let mut client_conn = ConnectionContext::new(false);
+        while crypto_handshake_done(&client_conn) == false {
+            if crypto_send_handshake(&mut client_conn, &mut client_stream) {
+                crypto_recv_handshake(&mut client_conn, &mut client_stream);
+            }
+        }
+        let mut client_stream = std::io::BufWriter::new(client_stream);
+        let mut bytes: u64 = 0;
+        let start = std::time::SystemTime::now();
+        let mut plaintext: &[u8] = &[0xaa; 16384];
+        b.iter(|| {
+            bytes += crypto_send_data(&mut client_conn,
+                                      &mut plaintext,
+                                      &mut client_stream).unwrap() as u64;
+        });
+        if let Ok(dur) = start.elapsed() {
+            let t = dur.as_secs() as f64
+                + dur.subsec_nanos() as f64 * 1e-9;
+            println!("Benchmark done (xmit): {} bytes in {:.2} s", bytes, t);
+            println!("{:.2} MB/s", bytes as f64 / 1024.0 / 1024.0 / t);
+        }
+        let mut plaintext: &[u8] = &[0xde, 0xde, 0xbe, 0xbe];
+        let _ = crypto_send_data(&mut client_conn, &mut plaintext, &mut client_stream);
+        // Unwrap the BufWriter, flushing the buffer
+        let _ = client_stream.into_inner().unwrap();
+        let _ = server_thread.join();
     }
 }
