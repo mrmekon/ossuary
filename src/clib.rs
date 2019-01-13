@@ -115,7 +115,7 @@ mod tests {
     use std::io::{Read,Write};
     use std::net::{TcpListener, TcpStream};
     use crate::clib::*;
-    pub fn server() -> Result<(), std::io::Error> {
+    fn server() -> Result<(), std::io::Error> {
         let listener = TcpListener::bind("127.0.0.1:9989").unwrap();
         for stream in listener.incoming() {
             let mut stream: TcpStream = stream.unwrap();
@@ -138,21 +138,32 @@ mod tests {
 
             let out_buf: [u8; 256] = [0; 256];
             let mut plaintext: [u8; 256] = [0; 256];
-            plaintext[0..11].copy_from_slice("hello world".as_bytes());
-            ossuary_send_data(
-                conn,
-                (&plaintext) as *const u8 as *mut u8, 11 as u16,
-                (&out_buf) as *const u8 as *mut u8, out_buf.len() as u16);
-            let _ = stream.write(&out_buf);
-
-            let out_buf: [u8; 256] = [0; 256];
-            let mut plaintext: [u8; 256] = [0; 256];
-            plaintext[0..13].copy_from_slice("goodbye world".as_bytes());
+            plaintext[0..13].copy_from_slice("from server 1".as_bytes());
             ossuary_send_data(
                 conn,
                 (&plaintext) as *const u8 as *mut u8, 13 as u16,
                 (&out_buf) as *const u8 as *mut u8, out_buf.len() as u16);
             let _ = stream.write(&out_buf);
+
+            let out_buf: [u8; 256] = [0; 256];
+            let mut plaintext: [u8; 256] = [0; 256];
+            plaintext[0..13].copy_from_slice("from server 2".as_bytes());
+            ossuary_send_data(
+                conn,
+                (&plaintext) as *const u8 as *mut u8, 13 as u16,
+                (&out_buf) as *const u8 as *mut u8, out_buf.len() as u16);
+            let _ = stream.write(&out_buf);
+
+            let _ = stream.read(&mut in_buf);
+            let out_buf: [u8; 256] = [0; 256];
+            let len = ossuary_recv_data(
+                conn,
+                (&in_buf) as *const u8 as *mut u8, in_buf.len() as u16,
+                (&out_buf) as *const u8 as *mut u8, out_buf.len() as u16);
+            if len != -1 {
+                println!("CLIB READ: {:?}",
+                         std::str::from_utf8(&out_buf[0..len as usize]).unwrap());
+            }
 
             ossuary_destroy_connection(&mut conn);
             break;
@@ -160,7 +171,7 @@ mod tests {
         Ok(())
     }
 
-    pub fn client() -> Result<(), std::io::Error> {
+    fn client() -> Result<(), std::io::Error> {
         let mut stream = TcpStream::connect("127.0.0.1:9989").unwrap();
         let mut conn = ossuary_create_connection(0);
 
@@ -179,6 +190,14 @@ mod tests {
             }
         }
 
+        let out_buf: [u8; 256] = [0; 256];
+        let mut plaintext: [u8; 256] = [0; 256];
+        plaintext[0..11].copy_from_slice("from client".as_bytes());
+        ossuary_send_data(
+            conn,
+            (&plaintext) as *const u8 as *mut u8, 11 as u16,
+            (&out_buf) as *const u8 as *mut u8, out_buf.len() as u16);
+        let _ = stream.write(&out_buf);
 
         let _ = stream.read(&mut in_buf);
         let out_buf: [u8; 256] = [0; 256];
@@ -187,7 +206,8 @@ mod tests {
             (&in_buf) as *const u8 as *mut u8, in_buf.len() as u16,
             (&out_buf) as *const u8 as *mut u8, out_buf.len() as u16);
         if len != -1 {
-            println!("FFI RECEIVED: {:?}", std::str::from_utf8(&out_buf[0..len as usize]));
+            println!("CLIB READ: {:?}",
+                     std::str::from_utf8(&out_buf[0..len as usize]).unwrap());
         }
 
         let _ = stream.read(&mut in_buf);
@@ -197,21 +217,17 @@ mod tests {
             (&in_buf) as *const u8 as *mut u8, in_buf.len() as u16,
             (&out_buf) as *const u8 as *mut u8, out_buf.len() as u16);
         if len != -1 {
-            println!("FFI RECEIVED: {:?}", std::str::from_utf8(&out_buf[0..len as usize]));
+            println!("CLIB READ: {:?}",
+                     std::str::from_utf8(&out_buf[0..len as usize]).unwrap());
         }
 
         ossuary_destroy_connection(&mut conn);
         Ok(())
     }
-    pub fn test() {
-        println!("FFI START");
+    #[test]
+    fn test() {
         thread::spawn(move || { let _ = server(); });
         let child = thread::spawn(move || { let _ = client(); });
         let _ = child.join();
-        println!("FFI DONE");
-    }
-    #[test]
-    fn it_works() {
-        test();
     }
 }

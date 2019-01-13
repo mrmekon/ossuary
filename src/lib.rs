@@ -498,11 +498,12 @@ where T: std::ops::DerefMut<Target = U>,
 #[cfg(test)]
 mod tests {
     use std::thread;
-    use std::time;
     use std::net::{TcpListener, TcpStream};
     use crate::*;
 
-    fn event_loop<T>(mut conn: ConnectionContext, mut stream: T, is_server: bool) -> Result<(), std::io::Error>
+    fn event_loop<T>(mut conn: ConnectionContext,
+                     mut stream: T,
+                     is_server: bool) -> Result<(), std::io::Error>
     where T: std::io::Read + std::io::Write {
         while crypto_handshake_done(&conn) == false {
             if crypto_send_handshake(&mut conn, &mut stream) {
@@ -511,24 +512,22 @@ mod tests {
         }
 
         if is_server {
-            let mut plaintext = "hello, world".as_bytes();
+            let mut plaintext = "message from server".as_bytes();
             let _ = crypto_send_data(&mut conn, &mut plaintext, &mut stream);
-            let _ = stream.flush();
-            loop {
-                std::thread::sleep(time::Duration::from_millis(50));
-            }
+        }
+        else {
+            let mut plaintext = "message from client".as_bytes();
+            let _ = crypto_send_data(&mut conn, &mut plaintext, &mut stream);
         }
 
-        loop {
-            let mut plaintext = vec!();
-            let _ = crypto_recv_data(&mut conn, &mut stream, &mut plaintext);
-            println!("decrypted: {:?}", String::from_utf8(plaintext));
-            std::thread::sleep(time::Duration::from_millis(50));
-        }
+        let mut plaintext = vec!();
+        let _ = crypto_recv_data(&mut conn, &mut stream, &mut plaintext);
+        println!("LIB READ: {:?}", String::from_utf8(plaintext).unwrap());
+        Ok(())
     }
 
 
-    pub fn server() -> Result<(), std::io::Error> {
+    fn server() -> Result<(), std::io::Error> {
         let listener = TcpListener::bind("127.0.0.1:9988").unwrap();
         for stream in listener.incoming() {
             let stream: TcpStream = stream.unwrap();
@@ -538,21 +537,17 @@ mod tests {
         Ok(())
     }
 
-    pub fn client() -> Result<(), std::io::Error> {
+    fn client() -> Result<(), std::io::Error> {
         let stream = TcpStream::connect("127.0.0.1:9988").unwrap();
         let conn = ConnectionContext::new(false);
         let _ = event_loop(conn, stream, false);
         Ok(())
     }
 
-    pub fn test() {
+    #[test]
+    fn test() {
         thread::spawn(move || { let _ = server(); });
         let child = thread::spawn(move || { let _ = client(); });
         let _ = child.join();
-    }
-
-    #[test]
-    fn it_works() {
-        test();
     }
 }
