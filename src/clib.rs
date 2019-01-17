@@ -98,14 +98,17 @@ pub extern "C" fn ossuary_send_handshake(conn: *mut ConnectionContext,
 }
 
 #[no_mangle]
-pub extern "C" fn ossuary_handshake_done(conn: *const ConnectionContext) -> u8 {
+pub extern "C" fn ossuary_handshake_done(conn: *const ConnectionContext) -> i32 {
     if conn.is_null() {
-        return 0u8;
+        return -1i32;
     }
     let conn = unsafe { &*conn };
     let done = crypto_handshake_done(&conn);
     ::std::mem::forget(conn);
-    done as u8
+    match done {
+        Ok(done) => done as i32,
+        Err(_) => -1i32,
+    }
 }
 
 #[no_mangle]
