@@ -73,10 +73,15 @@ pub extern "C" fn ossuary_recv_handshake(conn: *mut ConnectionContext,
     let inlen = unsafe { *in_buf_len as usize };
     let r_in_buf: &[u8] = unsafe { std::slice::from_raw_parts(in_buf, inlen) };
     let mut slice = r_in_buf;
-    crypto_recv_handshake(&mut conn, &mut slice);
+    let written = match crypto_recv_handshake(&mut conn, &mut slice) {
+        Ok(read) => {
+            read as u16
+        },
+        _ => {
+            0u16
+        }
+    };
     ::std::mem::forget(conn);
-    let written = (inlen - slice.len()) as u16;
-    unsafe { *in_buf_len = written };
     written as i32 // TODO
 }
 
@@ -131,7 +136,6 @@ pub extern "C" fn ossuary_send_data(conn: *mut ConnectionContext,
         Err(_) => { return -1; },
     }
     ::std::mem::forget(conn);
-    //(out_buf_len - out_slice.len() as u16) as i32
     bytes_written as i32
 }
 
@@ -164,7 +168,7 @@ pub extern "C" fn ossuary_recv_data(conn: *mut ConnectionContext,
 #[cfg(test)]
 mod tests {
     use std::thread;
-    use std::io::{Read,Write};
+    use std::io::{Write};
     use std::net::{TcpListener, TcpStream};
     use std::io::BufRead;
     use crate::clib::*;
@@ -244,17 +248,18 @@ mod tests {
         ossuary_set_secret_key(conn, key as *const u8);
 
         let out_buf: [u8; 512] = [0; 512];
-        let mut in_buf: [u8; 512] = [0; 512];
 
+        let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
         while ossuary_handshake_done(conn) == 0 {
             let mut out_len = out_buf.len() as u16;
             let more = ossuary_send_handshake(conn, (&out_buf) as *const u8 as *mut u8, &mut out_len);
             let _ = stream.write_all(&out_buf[0.. out_len as usize]).unwrap();
 
             if more != 0 {
-                let _ = stream.read(&mut in_buf);
+                let in_buf = reader.fill_buf().unwrap();
                 let mut in_len = in_buf.len() as u16;
-                ossuary_recv_handshake(conn, (&in_buf) as *const u8, &mut in_len);
+                let len = ossuary_recv_handshake(conn, in_buf as *const [u8] as *const u8, &mut in_len);
+                reader.consume(len as usize);
             }
         }
 
@@ -295,7 +300,7 @@ mod tests {
     }
 
     #[test]
-    fn test() {
+    fn test_clib() {
         let server = thread::spawn(move || { let _ = server(); });
         std::thread::sleep(std::time::Duration::from_millis(500));
         let child = thread::spawn(move || { let _ = client(); });
