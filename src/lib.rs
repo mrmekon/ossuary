@@ -838,7 +838,7 @@ pub fn crypto_handshake_done(conn: &ConnectionContext) -> Result<bool, &OssuaryE
     }
 }
 
-pub fn crypto_send_data<T,U>(conn: &mut ConnectionContext, in_buf: &[u8], mut out_buf: T) -> Result<u16, OssuaryError>
+pub fn crypto_send_data<T,U>(conn: &mut ConnectionContext, in_buf: &[u8], mut out_buf: T) -> Result<usize, OssuaryError>
 where T: std::ops::DerefMut<Target = U>,
       U: std::io::Write {
     match conn.state {
@@ -877,18 +877,18 @@ where T: std::ops::DerefMut<Target = U>,
     buf.extend(&tag);
     let _ = write_packet(&mut out_buf, &buf,
                          &mut next_msg_id, PacketType::EncryptedData);
-    bytes = (buf.len() + ::std::mem::size_of::<PacketHeader>()) as u16;
+    bytes = buf.len() + ::std::mem::size_of::<PacketHeader>();
     conn.local_msg_id = next_msg_id;
     Ok(bytes)
 }
 
-pub fn crypto_recv_data<T,U,R,V>(conn: &mut ConnectionContext, in_buf: T, mut out_buf: R) -> Result<(u16, u16), OssuaryError>
+pub fn crypto_recv_data<T,U,R,V>(conn: &mut ConnectionContext, in_buf: T, mut out_buf: R) -> Result<(usize, usize), OssuaryError>
 where T: std::ops::DerefMut<Target = U>,
       U: std::io::Read,
       R: std::ops::DerefMut<Target = V>,
       V: std::io::Write {
-    let bytes_written: u16;
-    let mut bytes_read: u16 = 0u16;
+    let bytes_written: usize;
+    let mut bytes_read: usize = 0;
     match conn.state {
         ConnectionState::Encrypted => {},
         _ => {
@@ -898,7 +898,7 @@ where T: std::ops::DerefMut<Target = U>,
 
     match read_packet(conn, in_buf) {
         Ok((pkt, bytes)) => {
-            bytes_read += bytes as u16;
+            bytes_read += bytes;
             if pkt.header.msg_id != conn.remote_msg_id {
                 println!("Message gap detected.  Restarting connection.");
                 println!("Server: {}", conn.is_server());
@@ -933,7 +933,7 @@ where T: std::ops::DerefMut<Target = U>,
                                             &remote_nonce,
                                             &aad, &ciphertext, &tag, &mut plaintext);
                             let _ = out_buf.write(&plaintext);
-                            bytes_written = ciphertext.len() as u16;
+                            bytes_written = ciphertext.len();
                         },
                         Err(_) => {
                             conn.reset_state(None);

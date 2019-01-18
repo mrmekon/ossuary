@@ -128,15 +128,15 @@ pub extern "C" fn ossuary_send_data(conn: *mut ConnectionContext,
     let r_in_buf: &[u8] = unsafe { std::slice::from_raw_parts(in_buf, in_buf_len as usize) };
     let mut out_slice = r_out_buf;
     let in_slice = r_in_buf;
-    let bytes_written: u16;
+    let bytes_written: i32;
     match crypto_send_data(&mut conn, &in_slice, &mut out_slice) {
         Ok(x) => {
-            bytes_written = x;
+            bytes_written = x as i32;
         }
         Err(_) => { return -1; },
     }
     ::std::mem::forget(conn);
-    bytes_written as i32
+    bytes_written
 }
 
 #[no_mangle]
@@ -154,8 +154,8 @@ pub extern "C" fn ossuary_recv_data(conn: *mut ConnectionContext,
     let bytes_read: u16;
     match crypto_recv_data(&mut conn, &mut in_slice, &mut out_slice) {
         Ok((read,written)) => {
-            unsafe { *out_buf_len = written };
-            bytes_read = read;
+            unsafe { *out_buf_len = written as u16 };
+            bytes_read = read as u16;
         },
         Err(_) => {
             return -1;
