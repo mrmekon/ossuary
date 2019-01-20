@@ -77,13 +77,14 @@ int main(int argc, char **argv) {
   memset(server_buf, 0, sizeof(server_buf));
 
   // Server sends encrypted data
+  out_len = sizeof(client_buf);
   bytes = snprintf((char*)server_buf, sizeof(server_buf), "hello world");
-  bytes = ossuary_send_data(server_conn, server_buf, bytes, client_buf, sizeof(client_buf));
+  bytes = ossuary_send_data(server_conn, server_buf, bytes, client_buf, &out_len);
   printf("server send data bytes: %d\n", bytes);
 
   // Client receives decrypted data
   out_len = sizeof(client_buf);
-  bytes = ossuary_recv_data(client_conn, client_buf, bytes, client_buf, &out_len);
+  bytes = ossuary_recv_data(client_conn, client_buf, &bytes, client_buf, &out_len);
   printf("client recv data bytes: %d\n", bytes);
   printf("decrypted: %s\n", client_buf);
 

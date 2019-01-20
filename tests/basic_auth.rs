@@ -12,7 +12,7 @@ fn event_loop<T>(mut conn: ConnectionContext,
 where T: std::io::Read + std::io::Write {
     // Run the opaque handshake until the connection is established
     while crypto_handshake_done(&conn).unwrap() == false {
-        if crypto_send_handshake(&mut conn, &mut stream) {
+        if crypto_send_handshake(&mut conn, &mut stream).is_ok() {
             loop {
                 match crypto_recv_handshake(&mut conn, &mut stream) {
                     Ok(_) => break,
