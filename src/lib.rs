@@ -236,6 +236,16 @@ struct KeyMaterial {
     session: Option<[u8; 32]>,
     nonce: [u8; 12],
 }
+impl Default for KeyMaterial {
+    fn default() -> Self {
+        KeyMaterial {
+            secret: None,
+            session: None,
+            public: [0u8; 32],
+            nonce: [0u8; 12],
+        }
+    }
+}
 
 pub enum ConnectionType {
     Client,
@@ -260,6 +270,27 @@ pub struct ConnectionContext {
     write_buf: [u8; PACKET_BUF_SIZE],
     write_buf_used: usize,
 }
+impl Default for ConnectionContext {
+    fn default() -> Self {
+        ConnectionContext {
+            state: ConnectionState::ClientNew,
+            conn_type: ConnectionType::Client,
+            local_key: Default::default(),
+            remote_key: None,
+            local_msg_id: 0u16,
+            remote_msg_id: 0u16,
+            challenge: None,
+            challenge_sig: None,
+            authorized_keys: vec!(),
+            secret_key: None,
+            public_key: None,
+            read_buf: [0u8; PACKET_BUF_SIZE],
+            read_buf_used: 0,
+            write_buf: [0u8; PACKET_BUF_SIZE],
+            write_buf_used: 0,
+        }
+    }
+}
 impl ConnectionContext {
     pub fn new(conn_type: ConnectionType) -> ConnectionContext {
         //let mut rng = thread_rng();
@@ -281,21 +312,12 @@ impl ConnectionContext {
             },
             conn_type: conn_type,
             local_key: key,
-            remote_key: None,
-            local_msg_id: 0u16,
-            remote_msg_id: 0u16,
-            challenge: None,
-            challenge_sig: None,
-            authorized_keys: vec!(),
-            secret_key: None,
-            public_key: None,
-            read_buf: [0u8; PACKET_BUF_SIZE],
-            read_buf_used: 0,
-            write_buf: [0u8; PACKET_BUF_SIZE],
-            write_buf_used: 0,
+            ..Default::default()
         }
     }
     fn reset_state(&mut self, permanent_err: Option<OssuaryError>) {
+        let default: ConnectionContext = Default::default();
+        *self = default;
         self.state = match permanent_err {
             None => {
                 match self.conn_type {
@@ -307,14 +329,6 @@ impl ConnectionContext {
                 ConnectionState::Failed(e)
             }
         };
-        self.local_msg_id = 0;
-        self.challenge = None;
-        self.challenge_sig = None;
-        self.remote_key = None;
-        self.read_buf_used = 0;
-        self.write_buf_used = 0;
-        self.local_msg_id = 0u16;
-        self.remote_msg_id = 0u16;
     }
     fn is_server(&self) -> bool {
         match self.conn_type {
