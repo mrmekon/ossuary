@@ -106,36 +106,25 @@ fn bench_test(b: &mut Bencher) {
             _ => panic!("Send failed"),
         }
     }
-    loop {
-        match crypto_flush(&mut client_conn, &mut client_stream) {
-            Ok(w) => {
-                if w == 0 {
-                    break;
-                }
-                println!("flushed: {}", w);
-            },
-            _ => panic!("Flush failed"),
+
+    while let Ok(w) = crypto_flush(&mut client_conn, &mut client_stream) {
+        if w == 0 {
+            break;
         }
     }
 
+    // Unwrap stream until it succeeds to force it to flush.
     let mut client_stream: Option<std::io::BufWriter<_>> = Some(client_stream);
-    loop {
-        client_stream = match client_stream {
-            None => break,
-            Some(s) => match s.into_inner() {
-                Ok(_) => None,
-                Err(e) => {
-                    match e.error().kind() {
-                        std::io::ErrorKind::WouldBlock => {
-                            Some(e.into_inner())
-                        },
-                        _ => panic!("error: {:?}", e.error()),
-                    }
-                },
-            }
-        };
+    while let Some(s) = client_stream {
+        client_stream = match s.into_inner() {
+            Err(e) => {
+                match e.error().kind() {
+                    std::io::ErrorKind::WouldBlock => Some(e.into_inner()),
+                    _ => None,
+                }
+            },
+            _ => None,
+        }
     }
-    println!("flushed");
-    //drop(client_stream); // flush the buffer
     let _ = server_thread.join();
 }
