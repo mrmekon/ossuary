@@ -69,8 +69,7 @@ int main(int argc, char **argv) {
       }
     }
 
-    //if (++count == 8) break;
-    usleep(100000);
+    usleep(1000);
   } while (!client_done || !server_done);
 
   memset(client_buf, 0, sizeof(client_buf));

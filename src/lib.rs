@@ -1,4 +1,3 @@
-#![feature(test)]
 #![feature(try_from)]
 
 extern crate x25519_dalek;
@@ -374,12 +373,14 @@ fn interpret_packet<'a, T>(pkt: &'a NetworkPacket) -> Result<&'a T, OssuaryError
     Ok(s)
 }
 
-fn interpret_packet_extra<'a, T>(pkt: &'a NetworkPacket) -> Result<(&'a T, &'a [u8]), OssuaryError> {
+fn interpret_packet_extra<'a, T>(pkt: &'a NetworkPacket)
+                                 -> Result<(&'a T, &'a [u8]), OssuaryError> {
     let s: &T = slice_as_struct(&pkt.data)?;
     Ok((s, &pkt.data[::std::mem::size_of::<T>()..]))
 }
 
-fn read_packet<T,U>(conn: &mut ConnectionContext, mut stream: T) ->Result<(NetworkPacket, usize), OssuaryError>
+fn read_packet<T,U>(conn: &mut ConnectionContext,
+                    mut stream: T) ->Result<(NetworkPacket, usize), OssuaryError>
 where T: std::ops::DerefMut<Target = U>,
       U: std::io::Read {
     let header_size = ::std::mem::size_of::<PacketHeader>();
@@ -470,7 +471,8 @@ where T: std::ops::DerefMut<Target = U>,
     Ok(written)
 }
 
-pub fn crypto_send_handshake<T,U>(conn: &mut ConnectionContext, mut buf: T) -> Result<usize, OssuaryError>
+pub fn crypto_send_handshake<T,U>(conn: &mut ConnectionContext,
+                                  mut buf: T) -> Result<usize, OssuaryError>
 where T: std::ops::DerefMut<Target = U>,
       U: std::io::Write {
     // Try to send any unsent buffered data
@@ -664,7 +666,8 @@ where T: std::ops::DerefMut<Target = U>,
     Ok(written)
 }
 
-pub fn crypto_recv_handshake<T,U>(conn: &mut ConnectionContext, buf: T) -> Result<usize, OssuaryError>
+pub fn crypto_recv_handshake<T,U>(conn: &mut ConnectionContext,
+                                  buf: T) -> Result<usize, OssuaryError>
 where T: std::ops::DerefMut<Target = U>,
       U: std::io::Read {
     let mut bytes_read: usize = 0;
@@ -762,7 +765,8 @@ where T: std::ops::DerefMut<Target = U>,
                                     &aad, &ciphertext, &tag, &mut plaintext)?;
                             let pubkey = &plaintext[0..32];
                             let sig = &plaintext[32..];
-                            if conn.authorized_keys.iter().filter(|k| &pubkey == k).count() > 0 {
+                            if conn.authorized_keys.iter().filter(
+                                |k| &pubkey == k).count() > 0 {
                                 let public = match PublicKey::from_bytes(pubkey) {
                                     Ok(p) => p,
                                     Err(_) => {
@@ -809,15 +813,6 @@ where T: std::ops::DerefMut<Target = U>,
                 _ => { error = true; }
             }
         },
-        ConnectionState::ServerSendPubKey => {
-            error = true;
-        }, // nop
-        ConnectionState::ServerSendChallenge => {
-            error = true;
-        }, // nop
-        ConnectionState::ClientNew => {
-            error = true;
-        }, // nop
         ConnectionState::ClientWaitKey(_t) => {
             match pkt.kind() {
                 PacketType::PublicKeyNonce => {
@@ -837,9 +832,6 @@ where T: std::ops::DerefMut<Target = U>,
                 }
             }
         },
-        ConnectionState::ClientSendAck => {
-            error = true;
-        }, // nop
         ConnectionState::ClientWaitAck(_t) => {
             match pkt.kind() {
                 PacketType::PubKeyAck => {
@@ -883,15 +875,17 @@ where T: std::ops::DerefMut<Target = U>,
                 },
             }
         },
-        ConnectionState::ClientSendAuth => {
-            error = true;
-        }, // nop
+        ConnectionState::ServerSendPubKey |
+        ConnectionState::ServerSendChallenge |
+        ConnectionState::ClientNew |
+        ConnectionState::ClientSendAck |
+        ConnectionState::ClientSendAuth |
+        ConnectionState::Encrypted => {
+            // no-op
+        },
         ConnectionState::Failed(_) => {
             error = true;
-        }, // nop
-        ConnectionState::Encrypted => {
-            error = true;
-        }, // nop
+        },
     }
     if error {
         conn.reset_state(None);
@@ -907,7 +901,9 @@ pub fn crypto_handshake_done(conn: &ConnectionContext) -> Result<bool, &OssuaryE
     }
 }
 
-pub fn crypto_send_data<T,U>(conn: &mut ConnectionContext, in_buf: &[u8], mut out_buf: T) -> Result<usize, OssuaryError>
+pub fn crypto_send_data<T,U>(conn: &mut ConnectionContext,
+                             in_buf: &[u8],
+                             mut out_buf: T) -> Result<usize, OssuaryError>
 where T: std::ops::DerefMut<Target = U>,
       U: std::io::Write {
     // Try to send any unsent buffered data
@@ -919,7 +915,8 @@ where T: std::ops::DerefMut<Target = U>,
     match conn.state {
         ConnectionState::Encrypted => {},
         _ => {
-            return Err(OssuaryError::InvalidPacket("Encrypted channel not established.".into()));
+            return Err(OssuaryError::InvalidPacket(
+                "Encrypted channel not established.".into()));
         }
     }
     let aad = [];
@@ -953,7 +950,9 @@ where T: std::ops::DerefMut<Target = U>,
     Ok(written)
 }
 
-pub fn crypto_recv_data<T,U,R,V>(conn: &mut ConnectionContext, in_buf: T, mut out_buf: R) -> Result<(usize, usize), OssuaryError>
+pub fn crypto_recv_data<T,U,R,V>(conn: &mut ConnectionContext,
+                                 in_buf: T,
+                                 mut out_buf: R) -> Result<(usize, usize), OssuaryError>
 where T: std::ops::DerefMut<Target = U>,
       U: std::io::Read,
       R: std::ops::DerefMut<Target = V>,
@@ -963,7 +962,8 @@ where T: std::ops::DerefMut<Target = U>,
     match conn.state {
         ConnectionState::Encrypted => {},
         _ => {
-            return Err(OssuaryError::InvalidPacket("Encrypted channel not established.".into()));
+            return Err(OssuaryError::InvalidPacket(
+                "Encrypted channel not established.".into()));
         }
     }
 
@@ -1017,7 +1017,8 @@ where T: std::ops::DerefMut<Target = U>,
                     }
                 },
                 _ => {
-                    return Err(OssuaryError::InvalidPacket("Received non-encrypted data on encrypted channel.".into()));
+                    return Err(OssuaryError::InvalidPacket(
+                        "Received non-encrypted data on encrypted channel.".into()));
                 },
             }
         },
@@ -1031,7 +1032,8 @@ where T: std::ops::DerefMut<Target = U>,
     Ok((bytes_read, bytes_written))
 }
 
-pub fn crypto_flush<R,V>(conn: &mut ConnectionContext, mut out_buf: R) -> Result<usize, OssuaryError>
+pub fn crypto_flush<R,V>(conn: &mut ConnectionContext,
+                         mut out_buf: R) -> Result<usize, OssuaryError>
 where R: std::ops::DerefMut<Target = V>,
       V: std::io::Write {
     return write_stored_packet(conn, &mut out_buf);
@@ -1039,10 +1041,6 @@ where R: std::ops::DerefMut<Target = V>,
 
 #[cfg(test)]
 mod tests {
-    extern crate test;
-    use test::Bencher;
-    use std::thread;
-    use std::net::{TcpListener, TcpStream};
     use crate::*;
 
     #[test]
@@ -1077,133 +1075,4 @@ mod tests {
         let _ = conn.set_authorized_keys(keys.iter().map(|x| x.as_slice())).unwrap();
     }
 
-    #[bench]
-    fn bench_test(b: &mut Bencher) {
-        let server_thread = thread::spawn(move || {
-            let listener = TcpListener::bind("127.0.0.1:9987").unwrap();
-            let mut server_stream = listener.incoming().next().unwrap().unwrap();
-            let mut server_conn = ConnectionContext::new(ConnectionType::UnauthenticatedServer);
-            while crypto_handshake_done(&server_conn).unwrap() == false {
-                if crypto_send_handshake(&mut server_conn, &mut server_stream).is_ok() {
-                    loop {
-                        match crypto_recv_handshake(&mut server_conn, &mut server_stream) {
-                            Ok(_) => break,
-                            Err(OssuaryError::WouldBlock(_)) => {},
-                            _ => panic!("Handshake failed"),
-                        }
-                    }
-                }
-            }
-            println!("server handshook");
-            let mut plaintext = vec!();
-            let mut bytes: u64 = 0;
-            let start = std::time::SystemTime::now();
-            loop {
-                //std::thread::sleep(std::time::Duration::from_millis(100));
-                match crypto_recv_data(&mut server_conn,
-                                       &mut server_stream,
-                                       &mut plaintext) {
-                    Ok((read, _written)) => bytes += read as u64,
-                    Err(OssuaryError::WouldBlock(_)) => continue,
-                    Err(e) => {
-                        println!("err: {:?}", e);
-                        panic!("Recv failed")
-                    },
-                }
-                if plaintext == [0xde, 0xde, 0xbe, 0xbe] {
-                    println!("finished");
-                    if let Ok(dur) = start.elapsed() {
-                        let t = dur.as_secs() as f64
-                            + dur.subsec_nanos() as f64 * 1e-9;
-                        println!("Benchmark done (recv): {} bytes in {:.2} s", bytes, t);
-                        println!("{:.2} MB/s", bytes as f64 / 1024.0 / 1024.0 / t);
-                    }
-                    break;
-                }
-                plaintext.clear();
-            }
-        });
-
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        let mut client_stream = TcpStream::connect("127.0.0.1:9987").unwrap();
-        client_stream.set_nonblocking(true).unwrap();
-        let mut client_conn = ConnectionContext::new(ConnectionType::Client);
-        while crypto_handshake_done(&client_conn).unwrap() == false {
-            if crypto_send_handshake(&mut client_conn, &mut client_stream).is_ok() {
-                loop {
-                    match crypto_recv_handshake(&mut client_conn, &mut client_stream) {
-                        Ok(_) => break,
-                        Err(OssuaryError::WouldBlock(_)) => {},
-                        Err(e) => {
-                            println!("err: {:?}", e);
-                            panic!("Handshake failed")
-                        },
-                    }
-                }
-            }
-        }
-        println!("client handshook");
-        let mut client_stream = std::io::BufWriter::new(client_stream);
-        let mut bytes: u64 = 0;
-        let start = std::time::SystemTime::now();
-        let mut plaintext: &[u8] = &[0xaa; 16384];
-        b.iter(|| {
-            match crypto_send_data(&mut client_conn,
-                                   &mut plaintext,
-                                   &mut client_stream) {
-                Ok(b) => bytes += b as u64,
-                Err(OssuaryError::WouldBlock(_)) => {},
-                _ => panic!("send error"),
-            }
-        });
-        if let Ok(dur) = start.elapsed() {
-            let t = dur.as_secs() as f64
-                + dur.subsec_nanos() as f64 * 1e-9;
-            println!("Benchmark done (xmit): {} bytes in {:.2} s", bytes, t);
-            println!("{:.2} MB/s", bytes as f64 / 1024.0 / 1024.0 / t);
-        }
-        let mut plaintext: &[u8] = &[0xde, 0xde, 0xbe, 0xbe];
-        loop {
-            match crypto_send_data(&mut client_conn, &mut plaintext, &mut client_stream) {
-                Ok(w) => {
-                    println!("wrote finish: {}", w);
-                    break;
-                },
-                Err(OssuaryError::WouldBlock(_)) => {},
-                _ => panic!("Send failed"),
-            }
-        }
-        loop {
-            match crypto_flush(&mut client_conn, &mut client_stream) {
-                Ok(w) => {
-                    if w == 0 {
-                        break;
-                    }
-                    println!("flushed: {}", w);
-                },
-                _ => panic!("Flush failed"),
-            }
-        }
-
-        let mut client_stream: Option<std::io::BufWriter<_>> = Some(client_stream);
-        loop {
-            client_stream = match client_stream {
-                None => break,
-                Some(s) => match s.into_inner() {
-                    Ok(_) => None,
-                    Err(e) => {
-                        match e.error().kind() {
-                            std::io::ErrorKind::WouldBlock => {
-                                Some(e.into_inner())
-                            },
-                            _ => panic!("error: {:?}", e.error()),
-                        }
-                    },
-                }
-            };
-        }
-        println!("flushed");
-        //drop(client_stream); // flush the buffer
-        let _ = server_thread.join();
-    }
 }
