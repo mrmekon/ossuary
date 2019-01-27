@@ -1,6 +1,4 @@
 use ossuary::{ConnectionContext, ConnectionType};
-use ossuary::{crypto_send_handshake,crypto_recv_handshake, crypto_handshake_done};
-use ossuary::{crypto_send_data,crypto_recv_data};
 use ossuary::OssuaryError;
 
 use std::thread;
@@ -11,10 +9,10 @@ fn event_loop<T>(mut conn: ConnectionContext,
                  is_server: bool) -> Result<(), std::io::Error>
 where T: std::io::Read + std::io::Write {
     // Run the opaque handshake until the connection is established
-    while crypto_handshake_done(&conn).unwrap() == false {
-        if crypto_send_handshake(&mut conn, &mut stream).is_ok() {
+    while conn.crypto_handshake_done().unwrap() == false {
+        if conn.crypto_send_handshake(&mut stream).is_ok() {
             loop {
-                match crypto_recv_handshake(&mut conn, &mut stream) {
+                match conn.crypto_recv_handshake(&mut stream) {
                     Ok(_) => break,
                     Err(OssuaryError::WouldBlock(_)) => {},
                     _ => panic!("Handshake failed."),
@@ -29,12 +27,12 @@ where T: std::io::Read + std::io::Write {
         true => (strings.0.as_bytes(), strings.1.as_bytes()),
         false => (strings.1.as_bytes(), strings.0.as_bytes()),
     };
-    let _ = crypto_send_data(&mut conn, &mut plaintext, &mut stream);
+    let _ = conn.crypto_send_data(&mut plaintext, &mut stream);
 
     // Read a message from the other party
     let mut recv_plaintext = vec!();
     loop {
-        match crypto_recv_data(&mut conn, &mut stream, &mut recv_plaintext) {
+        match conn.crypto_recv_data(&mut stream, &mut recv_plaintext) {
             Ok(_) => {
                 println!("(basic_auth) received: {:?}",
                          String::from_utf8(recv_plaintext.clone()).unwrap());

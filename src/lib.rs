@@ -566,6 +566,586 @@ impl ConnectionContext {
             }
         }
     }
+
+    /// Writes the next handshake packet to the output stream.
+    ///
+    ///
+    ///
+    /// On success, returns the number of bytes written to the output buffer.
+    pub fn crypto_send_handshake<T,U>(&mut self, mut buf: T) -> Result<usize, OssuaryError>
+    where T: std::ops::DerefMut<Target = U>,
+          U: std::io::Write {
+        // Try to send any unsent buffered data
+        match write_stored_packet(self, &mut buf) {
+            Ok(w) if w == 0 => {},
+            Ok(w) => return Err(OssuaryError::WouldBlock(w)),
+            Err(e) => return Err(e),
+        }
+        let written = match self.state {
+            ConnectionState::ServerNew => {
+                // Wait for client to initiate connection
+                0
+            },
+            ConnectionState::Encrypted => {
+                // Handshake finished
+                0
+            },
+            ConnectionState::ServerWaitAck(t) |
+            ConnectionState::ServerWaitAuth(t) |
+            ConnectionState::ClientWaitKey(t) |
+            ConnectionState::ClientWaitAck(t) => {
+                let mut w: usize = 0;
+                // Wait for response, with timeout
+                if let Ok(dur) = t.elapsed() {
+                    if dur.as_secs() > MAX_HANDSHAKE_WAIT_TIME {
+                        let pkt: HandshakePacket = Default::default();
+                        w = write_packet(self, &mut buf, struct_as_slice(&pkt),
+                                         PacketType::Reset)?;
+                        self.reset_state(None);
+                    }
+                }
+                w
+            },
+            ConnectionState::ServerSendPubKey => {
+                // Send session public key and nonce to the client
+                let mut pkt: HandshakePacket = Default::default();
+                pkt.public_key.copy_from_slice(&self.local_key.public);
+                pkt.nonce.copy_from_slice(&self.local_key.nonce);
+                let w = write_packet(self, &mut buf, struct_as_slice(&pkt),
+                                     PacketType::PublicKeyNonce)?;
+                self.state = ConnectionState::ServerWaitAck(std::time::SystemTime::now());
+                w
+            },
+            ConnectionState::ServerSendChallenge => {
+                match self.conn_type {
+                    ConnectionType::AuthenticatedServer => {
+                        // Send a block of random data over the encrypted session to
+                        // the client.  The client must sign it with its key to prove
+                        // key possession.
+                        let mut rng = match OsRng::new() {
+                            Ok(rng) => rng,
+                            Err(_) => {
+                                self.reset_state(None);
+                                return Err(OssuaryError::InvalidKey);
+                            }
+                        };
+                        let aad = [];
+                        let mut challenge: [u8; CHALLENGE_LEN] = [0; CHALLENGE_LEN];
+                        rng.fill_bytes(&mut challenge);
+                        self.challenge = Some(challenge.to_vec());
+                        let mut ciphertext = Vec::with_capacity(CHALLENGE_LEN);
+                        let session_key = match self.local_key.session {
+                            Some(ref s) => s,
+                            None => {
+                                self.reset_state(None);
+                                return Err(OssuaryError::InvalidKey);
+                            }
+                        };
+                        let tag = match encrypt(session_key.as_bytes(),
+                                                &self.local_key.nonce,
+                                                &aad, &challenge, &mut ciphertext) {
+                            Ok(tag) => tag,
+                            Err(_) => {
+                                self.reset_state(None);
+                                return Err(OssuaryError::InvalidKey);
+                            }
+                        };
+                        let pkt: EncryptedPacket = EncryptedPacket {
+                            tag_len: tag.len() as u16,
+                            data_len: ciphertext.len() as u16,
+                        };
+                        let mut pkt_buf: Vec<u8>= vec![];
+                        pkt_buf.extend(struct_as_slice(&pkt));
+                        pkt_buf.extend(&ciphertext);
+                        pkt_buf.extend(&tag);
+                        let w = write_packet(self, &mut buf, &pkt_buf,
+                                             PacketType::AuthChallenge)?;
+                        self.state = ConnectionState::ServerWaitAuth(std::time::SystemTime::now());
+                        w
+                    },
+                    _ => {
+                        // For unauthenticated connections, we are done.  Already encrypted.
+                        let pkt: HandshakePacket = Default::default();
+                        let w = write_packet(self, &mut buf, struct_as_slice(&pkt),
+                                             PacketType::PubKeyAck)?;
+                        self.state = ConnectionState::Encrypted;
+                        w // handshake is finished (success)
+                    },
+                }
+            },
+            ConnectionState::ClientNew => {
+                // Send session public key and nonce to initiate connection
+                let mut pkt: HandshakePacket = Default::default();
+                pkt.public_key.copy_from_slice(&self.local_key.public);
+                pkt.nonce.copy_from_slice(&self.local_key.nonce);
+                let w = write_packet(self, &mut buf, struct_as_slice(&pkt),
+                                     PacketType::PublicKeyNonce)?;
+                self.state = ConnectionState::ClientWaitKey(std::time::SystemTime::now());
+                w
+            },
+            ConnectionState::ClientSendAck => {
+                // Acknowledge reception of server's session public key and nonce
+                let pkt: HandshakePacket = Default::default();
+                let w = write_packet(self, &mut buf, struct_as_slice(&pkt),
+                                     PacketType::PubKeyAck)?;
+                self.state = ConnectionState::ClientWaitAck(std::time::SystemTime::now());
+                w
+            },
+            ConnectionState::ClientSendAuth => {
+                // Send signature of the server's challenge back to the server,
+                // along with the public part of the authentication key.  This is
+                // done over the established encrypted channel.
+                let secret = match self.secret_key {
+                    Some(ref s) => match SecretKey::from_bytes(s.as_bytes()) {
+                        Ok(s) => s, // local copy of secret key
+                        Err(_) => {
+                            self.reset_state(Some(OssuaryError::InvalidKey));
+                            return Err(OssuaryError::InvalidKey);
+                        }
+                    },
+                    None => {
+                        self.reset_state(Some(OssuaryError::InvalidKey));
+                        return Err(OssuaryError::InvalidKey);
+                    }
+                };
+                let public = PublicKey::from(&secret);
+                let keypair = Keypair { secret: secret, public: public };
+                let sig = match self.challenge {
+                    Some(ref c) => keypair.sign(c).to_bytes(),
+                    None => {
+                        self.reset_state(None);
+                        return Err(OssuaryError::InvalidSignature);
+                    }
+                };
+                let mut pkt_data: Vec<u8> = Vec::with_capacity(CHALLENGE_LEN + 32);
+                pkt_data.extend_from_slice(public.as_bytes());
+                pkt_data.extend_from_slice(&sig);
+                self.challenge_sig = Some(sig.to_vec());
+
+                let aad = [];
+                let mut ciphertext = Vec::with_capacity(pkt_data.len());
+                let session_key = match self.local_key.session {
+                    Some(ref s) => s,
+                    None => {
+                        self.reset_state(None);
+                        return Err(OssuaryError::InvalidKey);
+                    }
+                };
+                let tag = match encrypt(session_key.as_bytes(),
+                                        &self.local_key.nonce,
+                                        &aad, &pkt_data, &mut ciphertext) {
+                    Ok(t) => t,
+                    Err(_) => {
+                        self.reset_state(None);
+                        return Err(OssuaryError::InvalidKey);
+                    }
+                };
+
+                let pkt: EncryptedPacket = EncryptedPacket {
+                    tag_len: tag.len() as u16,
+                    data_len: ciphertext.len() as u16,
+                };
+                let mut pkt_buf: Vec<u8>= vec![];
+                pkt_buf.extend(struct_as_slice(&pkt));
+                pkt_buf.extend(&ciphertext);
+                pkt_buf.extend(&tag);
+                let w = write_packet(self, &mut buf, &pkt_buf,
+                                     PacketType::AuthResponse)?;
+                self.state = ConnectionState::Encrypted;
+                w // handshake is finished (success)
+            },
+            ConnectionState::Failed(_) => {
+                // This is a permanent failure.
+                let pkt: HandshakePacket = Default::default();
+                let w = write_packet(self, &mut buf, struct_as_slice(&pkt),
+                                     PacketType::Disconnect)?;
+                self.reset_state(Some(OssuaryError::ConnectionFailed));
+                w // handshake is finished (failed)
+            },
+        };
+        Ok(written)
+    }
+
+    /// Receive the next handshake packet from the input buffer
+    ///
+    /// On success, returns the number of bytes consumed from the input buffer.
+    pub fn crypto_recv_handshake<T,U>(&mut self, buf: T) -> Result<usize, OssuaryError>
+    where T: std::ops::DerefMut<Target = U>,
+          U: std::io::Read {
+        let mut bytes_read: usize = 0;
+
+        match self.state {
+            ConnectionState::Encrypted => return Ok(0),
+            _ => {},
+        }
+
+        let pkt: NetworkPacket = match read_packet(self, buf) {
+            Ok((p, r)) => {
+                bytes_read += r;
+                p
+            },
+            Err(OssuaryError::WouldBlock(b)) => {
+                return Err(OssuaryError::WouldBlock(b));
+            }
+            Err(e) => {
+                self.reset_state(None);
+                return Err(e);
+            }
+        };
+
+        let mut error = false;
+        match pkt.kind() {
+            PacketType::Reset => {
+                self.reset_state(None);
+                return Err(OssuaryError::ConnectionReset);
+            },
+            PacketType::Disconnect => {
+                self.reset_state(Some(OssuaryError::ConnectionFailed));
+                return Err(OssuaryError::ConnectionFailed);
+            },
+            _ => {},
+        }
+
+        if pkt.header.msg_id != self.remote_msg_id {
+            println!("Message gap detected.  Restarting connection.");
+            println!("Server: {}", self.is_server());
+            self.reset_state(None);
+            return Err(OssuaryError::InvalidPacket("Message ID does not match".into()));
+        }
+        self.remote_msg_id = pkt.header.msg_id + 1;
+
+        match self.state {
+            ConnectionState::ServerNew => {
+                match pkt.kind() {
+                    PacketType::PublicKeyNonce => {
+                        let data_pkt: Result<&HandshakePacket, _> = interpret_packet(&pkt);
+                        match data_pkt {
+                            Ok(ref data_pkt) => {
+                                self.add_remote_key(&data_pkt.public_key, &data_pkt.nonce);
+                                self.state = ConnectionState::ServerSendPubKey;
+                            },
+                            Err(_) => {
+                                error = true;
+                            },
+                        }
+                    },
+                    _ => { error = true; }
+                }
+            },
+            ConnectionState::ServerWaitAck(_t) => {
+                match pkt.kind() {
+                    PacketType::PubKeyAck => {
+                        self.state = ConnectionState::ServerSendChallenge;
+                    },
+                    _ => { error = true; }
+                }
+            },
+            ConnectionState::ServerWaitAuth(_t) => {
+                match pkt.kind() {
+                    PacketType::AuthResponse => {
+                        match interpret_packet_extra::<EncryptedPacket>(&pkt) {
+                            Ok((data_pkt, rest)) => {
+                                let ciphertext = &rest[..data_pkt.data_len as usize];
+                                let tag = &rest[data_pkt.data_len as usize..];
+                                let aad = [];
+                                let mut plaintext = Vec::with_capacity(ciphertext.len());
+                                let session_key = match self.local_key.session {
+                                    Some(ref k) => k,
+                                    None => {
+                                        self.reset_state(None);
+                                        return Err(OssuaryError::InvalidKey);
+                                    }
+                                };
+                                let remote_nonce = match self.remote_key {
+                                    Some(ref rem) => rem.nonce,
+                                    None => {
+                                        self.reset_state(None);
+                                        return Err(OssuaryError::InvalidKey);
+                                    }
+                                };
+                                decrypt(session_key.as_bytes(),
+                                        &remote_nonce,
+                                        &aad, &ciphertext, &tag, &mut plaintext)?;
+                                let pubkey = &plaintext[0..32];
+                                let sig = &plaintext[32..];
+                                if self.authorized_keys.iter().filter(
+                                    |k| &pubkey == k).count() > 0 {
+                                    let public = match PublicKey::from_bytes(pubkey) {
+                                        Ok(p) => p,
+                                        Err(_) => {
+                                            self.reset_state(None);
+                                            return Err(OssuaryError::InvalidKey);
+                                        }
+                                    };
+                                    let sig = match Signature::from_bytes(sig) {
+                                        Ok(s) => s,
+                                        Err(_) => {
+                                            self.reset_state(None);
+                                            return Err(OssuaryError::InvalidKey);
+                                        }
+                                    };
+                                    let challenge = match self.challenge {
+                                        Some(ref c) => c,
+                                        None => {
+                                            self.reset_state(None);
+                                            return Err(OssuaryError::InvalidKey);
+                                        }
+                                    };
+                                    match public.verify(challenge, &sig) {
+                                        Ok(_) => {
+                                            self.state = ConnectionState::Encrypted;
+                                        },
+                                        Err(_) => {
+                                            println!("Verify bad");
+                                            self.state = ConnectionState::Failed(
+                                                OssuaryError::InvalidSignature);
+                                        },
+                                    }
+                                }
+                                else {
+                                    println!("Key not allowed");
+                                    self.state = ConnectionState::Failed(OssuaryError::InvalidKey);
+                                }
+                            },
+                            Err(_) => {
+                                self.reset_state(None);
+                                return Err(OssuaryError::InvalidPacket("Response invalid".into()));
+                            },
+                        };
+                    },
+                    _ => { error = true; }
+                }
+            },
+            ConnectionState::ClientWaitKey(_t) => {
+                match pkt.kind() {
+                    PacketType::PublicKeyNonce => {
+                        let data_pkt: Result<&HandshakePacket, _> = interpret_packet(&pkt);
+                        match data_pkt {
+                            Ok(data_pkt) => {
+                                self.add_remote_key(&data_pkt.public_key, &data_pkt.nonce);
+                                self.state = ConnectionState::ClientSendAck;
+                            },
+                            Err(_) => {
+                                error = true;
+                            },
+                        }
+                    },
+                    _ => {
+                        error = true;
+                    }
+                }
+            },
+            ConnectionState::ClientWaitAck(_t) => {
+                match pkt.kind() {
+                    PacketType::PubKeyAck => {
+                        self.state = ConnectionState::Encrypted;
+                    },
+                    PacketType::AuthChallenge => {
+                        match interpret_packet_extra::<EncryptedPacket>(&pkt) {
+                            Ok((data_pkt, rest)) => {
+                                let ciphertext = &rest[..data_pkt.data_len as usize];
+                                let tag = &rest[data_pkt.data_len as usize..];
+                                let aad = [];
+                                let mut plaintext = Vec::with_capacity(ciphertext.len());
+
+                                let session_key = match self.local_key.session {
+                                    Some(ref k) => k,
+                                    None => {
+                                        self.reset_state(None);
+                                        return Err(OssuaryError::InvalidKey);
+                                    }
+                                };
+                                let remote_nonce = match self.remote_key {
+                                    Some(ref rem) => rem.nonce,
+                                    None => {
+                                        self.reset_state(None);
+                                        return Err(OssuaryError::InvalidKey);
+                                    }
+                                };
+                                decrypt(session_key.as_bytes(),
+                                        &remote_nonce,
+                                        &aad, &ciphertext, &tag, &mut plaintext)?;
+                                self.challenge = Some(plaintext);
+                                self.state = ConnectionState::ClientSendAuth;
+                            },
+                            Err(_) => {
+                                error = true;
+                            },
+                        }
+                    },
+                    _ => {
+                        error = true;
+                    },
+                }
+            },
+            ConnectionState::ServerSendPubKey |
+            ConnectionState::ServerSendChallenge |
+            ConnectionState::ClientNew |
+            ConnectionState::ClientSendAck |
+            ConnectionState::ClientSendAuth |
+            ConnectionState::Encrypted => {
+                // no-op
+            },
+            ConnectionState::Failed(_) => {
+                error = true;
+            },
+        }
+        if error {
+            self.reset_state(None);
+            return Err(OssuaryError::ConnectionReset);
+        }
+        Ok(bytes_read)
+    }
+
+    /// Returns whether the handshake process is complete.
+    ///
+    ///
+    pub fn crypto_handshake_done(&self) -> Result<bool, &OssuaryError> {
+        match self.state {
+            ConnectionState::Encrypted => Ok(true),
+            ConnectionState::Failed(ref e) => Err(e),
+            _ => Ok(false),
+        }
+    }
+
+    pub fn crypto_send_data<T,U>(&mut self,
+                                 in_buf: &[u8],
+                                 mut out_buf: T) -> Result<usize, OssuaryError>
+    where T: std::ops::DerefMut<Target = U>,
+          U: std::io::Write {
+        // Try to send any unsent buffered data
+        match write_stored_packet(self, &mut out_buf) {
+            Ok(w) if w == 0 => {},
+            Ok(w) => return Err(OssuaryError::WouldBlock(w)),
+            Err(e) => return Err(e),
+        }
+        match self.state {
+            ConnectionState::Encrypted => {},
+            _ => {
+                return Err(OssuaryError::InvalidPacket(
+                    "Encrypted channel not established.".into()));
+            }
+        }
+        let aad = [];
+        let mut ciphertext = Vec::with_capacity(in_buf.len());
+        let session_key = match self.local_key.session {
+            Some(ref k) => k,
+            None => {
+                self.reset_state(None);
+                return Err(OssuaryError::InvalidKey);;
+            }
+        };
+        let tag = match encrypt(session_key.as_bytes(),
+                                &self.local_key.nonce, &aad, in_buf, &mut ciphertext) {
+            Ok(t) => t,
+            Err(_) => {
+                self.reset_state(None);
+                return Err(OssuaryError::InvalidKey);;
+            }
+        };
+
+        let pkt: EncryptedPacket = EncryptedPacket {
+            tag_len: tag.len() as u16,
+            data_len: ciphertext.len() as u16,
+        };
+        let mut buf: Vec<u8>= vec![];
+        buf.extend(struct_as_slice(&pkt));
+        buf.extend(&ciphertext);
+        buf.extend(&tag);
+        let written = write_packet(self, &mut out_buf, &buf,
+                                   PacketType::EncryptedData)?;
+        Ok(written)
+    }
+
+    pub fn crypto_recv_data<T,U,R,V>(&mut self,
+                                     in_buf: T,
+                                     mut out_buf: R) -> Result<(usize, usize), OssuaryError>
+    where T: std::ops::DerefMut<Target = U>,
+          U: std::io::Read,
+          R: std::ops::DerefMut<Target = V>,
+          V: std::io::Write {
+        let bytes_written: usize;
+        let mut bytes_read: usize = 0;
+        match self.state {
+            ConnectionState::Encrypted => {},
+            _ => {
+                return Err(OssuaryError::InvalidPacket(
+                    "Encrypted channel not established.".into()));
+            }
+        }
+
+        match read_packet(self, in_buf) {
+            Ok((pkt, bytes)) => {
+                bytes_read += bytes;
+                if pkt.header.msg_id != self.remote_msg_id {
+                    let msg_id = pkt.header.msg_id;
+                    println!("Message gap detected.  Restarting connection. ({} != {})",
+                             msg_id, self.remote_msg_id);
+                    println!("Server: {}", self.is_server());
+                    self.reset_state(None);
+                    return Err(OssuaryError::InvalidPacket("Message ID mismatch".into()))
+                }
+                self.remote_msg_id = pkt.header.msg_id + 1;
+
+                match pkt.kind() {
+                    PacketType::EncryptedData => {
+                        match interpret_packet_extra::<EncryptedPacket>(&pkt) {
+                            Ok((data_pkt, rest)) => {
+                                let ciphertext = &rest[..data_pkt.data_len as usize];
+                                let tag = &rest[data_pkt.data_len as usize..];
+                                let aad = [];
+                                let mut plaintext = Vec::with_capacity(ciphertext.len());
+                                let session_key = match self.local_key.session {
+                                    Some(ref k) => k,
+                                    None => {
+                                        self.reset_state(None);
+                                        return Err(OssuaryError::InvalidKey);
+                                    }
+                                };
+                                let remote_nonce = match self.remote_key {
+                                    Some(ref rem) => rem.nonce,
+                                    None => {
+                                        self.reset_state(None);
+                                        return Err(OssuaryError::InvalidKey);
+                                    }
+                                };
+                                decrypt(session_key.as_bytes(),
+                                        &remote_nonce,
+                                        &aad, &ciphertext, &tag, &mut plaintext)?;
+                                bytes_written = match out_buf.write(&plaintext) {
+                                    Ok(w) => w,
+                                    Err(e) => return Err(e.into()),
+                                };
+                            },
+                            Err(_) => {
+                                self.reset_state(None);
+                                return Err(OssuaryError::InvalidKey);
+                            },
+                        }
+                    },
+                    _ => {
+                        return Err(OssuaryError::InvalidPacket(
+                            "Received non-encrypted data on encrypted channel.".into()));
+                    },
+                }
+            },
+            Err(OssuaryError::WouldBlock(b)) => {
+                return Err(OssuaryError::WouldBlock(b));
+            },
+            Err(_e) => {
+                self.reset_state(None);
+                return Err(OssuaryError::InvalidPacket("Packet header did not parse.".into()));
+            },
+        }
+        Ok((bytes_read, bytes_written))
+    }
+
+    pub fn crypto_flush<R,V>(&mut self,
+                             mut out_buf: R) -> Result<usize, OssuaryError>
+    where R: std::ops::DerefMut<Target = V>,
+          V: std::io::Write {
+        return write_stored_packet(self, &mut out_buf);
+    }
 }
 
 /// Cast the data bytes in a NetworkPacket into a struct
@@ -689,588 +1269,6 @@ where T: std::ops::DerefMut<Target = U>,
     conn.local_msg_id += 1;
     let written = write_stored_packet(conn, stream)?;
     Ok(written)
-}
-
-/// Writes the next handshake packet to the output stream.
-///
-///
-///
-/// On success, returns the number of bytes written to the output buffer.
-pub fn crypto_send_handshake<T,U>(conn: &mut ConnectionContext,
-                                  mut buf: T) -> Result<usize, OssuaryError>
-where T: std::ops::DerefMut<Target = U>,
-      U: std::io::Write {
-    // Try to send any unsent buffered data
-    match write_stored_packet(conn, &mut buf) {
-        Ok(w) if w == 0 => {},
-        Ok(w) => return Err(OssuaryError::WouldBlock(w)),
-        Err(e) => return Err(e),
-    }
-    let written = match conn.state {
-        ConnectionState::ServerNew => {
-            // Wait for client to initiate connection
-            0
-        },
-        ConnectionState::Encrypted => {
-            // Handshake finished
-            0
-        },
-        ConnectionState::ServerWaitAck(t) |
-        ConnectionState::ServerWaitAuth(t) |
-        ConnectionState::ClientWaitKey(t) |
-        ConnectionState::ClientWaitAck(t) => {
-            let mut w: usize = 0;
-            // Wait for response, with timeout
-            if let Ok(dur) = t.elapsed() {
-                if dur.as_secs() > MAX_HANDSHAKE_WAIT_TIME {
-                    let pkt: HandshakePacket = Default::default();
-                    w = write_packet(conn, &mut buf, struct_as_slice(&pkt),
-                                     PacketType::Reset)?;
-                    conn.reset_state(None);
-                }
-            }
-            w
-        },
-        ConnectionState::ServerSendPubKey => {
-            // Send session public key and nonce to the client
-            let mut pkt: HandshakePacket = Default::default();
-            pkt.public_key.copy_from_slice(&conn.local_key.public);
-            pkt.nonce.copy_from_slice(&conn.local_key.nonce);
-            let w = write_packet(conn, &mut buf, struct_as_slice(&pkt),
-                                 PacketType::PublicKeyNonce)?;
-            conn.state = ConnectionState::ServerWaitAck(std::time::SystemTime::now());
-            w
-        },
-        ConnectionState::ServerSendChallenge => {
-            match conn.conn_type {
-                ConnectionType::AuthenticatedServer => {
-                    // Send a block of random data over the encrypted session to
-                    // the client.  The client must sign it with its key to prove
-                    // key possession.
-                    let mut rng = match OsRng::new() {
-                        Ok(rng) => rng,
-                        Err(_) => {
-                            conn.reset_state(None);
-                            return Err(OssuaryError::InvalidKey);
-                        }
-                    };
-                    let aad = [];
-                    let mut challenge: [u8; CHALLENGE_LEN] = [0; CHALLENGE_LEN];
-                    rng.fill_bytes(&mut challenge);
-                    conn.challenge = Some(challenge.to_vec());
-                    let mut ciphertext = Vec::with_capacity(CHALLENGE_LEN);
-                    let session_key = match conn.local_key.session {
-                        Some(ref s) => s,
-                        None => {
-                            conn.reset_state(None);
-                            return Err(OssuaryError::InvalidKey);
-                        }
-                    };
-                    let tag = match encrypt(session_key.as_bytes(),
-                                            &conn.local_key.nonce,
-                                            &aad, &challenge, &mut ciphertext) {
-                        Ok(tag) => tag,
-                        Err(_) => {
-                            conn.reset_state(None);
-                            return Err(OssuaryError::InvalidKey);
-                        }
-                    };
-                    let pkt: EncryptedPacket = EncryptedPacket {
-                        tag_len: tag.len() as u16,
-                        data_len: ciphertext.len() as u16,
-                    };
-                    let mut pkt_buf: Vec<u8>= vec![];
-                    pkt_buf.extend(struct_as_slice(&pkt));
-                    pkt_buf.extend(&ciphertext);
-                    pkt_buf.extend(&tag);
-                    let w = write_packet(conn, &mut buf, &pkt_buf,
-                                         PacketType::AuthChallenge)?;
-                    conn.state = ConnectionState::ServerWaitAuth(std::time::SystemTime::now());
-                    w
-                },
-                _ => {
-                    // For unauthenticated connections, we are done.  Already encrypted.
-                    let pkt: HandshakePacket = Default::default();
-                    let w = write_packet(conn, &mut buf, struct_as_slice(&pkt),
-                                         PacketType::PubKeyAck)?;
-                    conn.state = ConnectionState::Encrypted;
-                    w // handshake is finished (success)
-                },
-            }
-        },
-        ConnectionState::ClientNew => {
-            // Send session public key and nonce to initiate connection
-            let mut pkt: HandshakePacket = Default::default();
-            pkt.public_key.copy_from_slice(&conn.local_key.public);
-            pkt.nonce.copy_from_slice(&conn.local_key.nonce);
-            let w = write_packet(conn, &mut buf, struct_as_slice(&pkt),
-                                 PacketType::PublicKeyNonce)?;
-            conn.state = ConnectionState::ClientWaitKey(std::time::SystemTime::now());
-            w
-        },
-        ConnectionState::ClientSendAck => {
-            // Acknowledge reception of server's session public key and nonce
-            let pkt: HandshakePacket = Default::default();
-            let w = write_packet(conn, &mut buf, struct_as_slice(&pkt),
-                                 PacketType::PubKeyAck)?;
-            conn.state = ConnectionState::ClientWaitAck(std::time::SystemTime::now());
-            w
-        },
-        ConnectionState::ClientSendAuth => {
-            // Send signature of the server's challenge back to the server,
-            // along with the public part of the authentication key.  This is
-            // done over the established encrypted channel.
-            let secret = match conn.secret_key {
-                Some(ref s) => match SecretKey::from_bytes(s.as_bytes()) {
-                    Ok(s) => s, // local copy of secret key
-                    Err(_) => {
-                        conn.reset_state(Some(OssuaryError::InvalidKey));
-                        return Err(OssuaryError::InvalidKey);
-                    }
-                },
-                None => {
-                    conn.reset_state(Some(OssuaryError::InvalidKey));
-                    return Err(OssuaryError::InvalidKey);
-                }
-            };
-            let public = PublicKey::from(&secret);
-            let keypair = Keypair { secret: secret, public: public };
-            let sig = match conn.challenge {
-                Some(ref c) => keypair.sign(c).to_bytes(),
-                None => {
-                    conn.reset_state(None);
-                    return Err(OssuaryError::InvalidSignature);
-                }
-            };
-            let mut pkt_data: Vec<u8> = Vec::with_capacity(CHALLENGE_LEN + 32);
-            pkt_data.extend_from_slice(public.as_bytes());
-            pkt_data.extend_from_slice(&sig);
-            conn.challenge_sig = Some(sig.to_vec());
-
-            let aad = [];
-            let mut ciphertext = Vec::with_capacity(pkt_data.len());
-            let session_key = match conn.local_key.session {
-                Some(ref s) => s,
-                None => {
-                    conn.reset_state(None);
-                    return Err(OssuaryError::InvalidKey);
-                }
-            };
-            let tag = match encrypt(session_key.as_bytes(),
-                                    &conn.local_key.nonce,
-                                    &aad, &pkt_data, &mut ciphertext) {
-                Ok(t) => t,
-                Err(_) => {
-                    conn.reset_state(None);
-                    return Err(OssuaryError::InvalidKey);
-                }
-            };
-
-            let pkt: EncryptedPacket = EncryptedPacket {
-                tag_len: tag.len() as u16,
-                data_len: ciphertext.len() as u16,
-            };
-            let mut pkt_buf: Vec<u8>= vec![];
-            pkt_buf.extend(struct_as_slice(&pkt));
-            pkt_buf.extend(&ciphertext);
-            pkt_buf.extend(&tag);
-            let w = write_packet(conn, &mut buf, &pkt_buf,
-                                 PacketType::AuthResponse)?;
-            conn.state = ConnectionState::Encrypted;
-            w // handshake is finished (success)
-        },
-        ConnectionState::Failed(_) => {
-            // This is a permanent failure.
-            let pkt: HandshakePacket = Default::default();
-            let w = write_packet(conn, &mut buf, struct_as_slice(&pkt),
-                                 PacketType::Disconnect)?;
-            conn.reset_state(Some(OssuaryError::ConnectionFailed));
-            w // handshake is finished (failed)
-        },
-    };
-    Ok(written)
-}
-
-/// Receive the next handshake packet from the input buffer
-///
-/// On success, returns the number of bytes consumed from the input buffer.
-pub fn crypto_recv_handshake<T,U>(conn: &mut ConnectionContext,
-                                  buf: T) -> Result<usize, OssuaryError>
-where T: std::ops::DerefMut<Target = U>,
-      U: std::io::Read {
-    let mut bytes_read: usize = 0;
-
-    match conn.state {
-        ConnectionState::Encrypted => return Ok(0),
-        _ => {},
-    }
-
-    let pkt: NetworkPacket = match read_packet(conn, buf) {
-        Ok((p, r)) => {
-            bytes_read += r;
-            p
-        },
-        Err(OssuaryError::WouldBlock(b)) => {
-            return Err(OssuaryError::WouldBlock(b));
-        }
-        Err(e) => {
-            conn.reset_state(None);
-            return Err(e);
-        }
-    };
-
-    let mut error = false;
-    match pkt.kind() {
-        PacketType::Reset => {
-            conn.reset_state(None);
-            return Err(OssuaryError::ConnectionReset);
-        },
-        PacketType::Disconnect => {
-            conn.reset_state(Some(OssuaryError::ConnectionFailed));
-            return Err(OssuaryError::ConnectionFailed);
-        },
-        _ => {},
-    }
-
-    if pkt.header.msg_id != conn.remote_msg_id {
-        println!("Message gap detected.  Restarting connection.");
-        println!("Server: {}", conn.is_server());
-        conn.reset_state(None);
-        return Err(OssuaryError::InvalidPacket("Message ID does not match".into()));
-    }
-    conn.remote_msg_id = pkt.header.msg_id + 1;
-
-    match conn.state {
-        ConnectionState::ServerNew => {
-            match pkt.kind() {
-                PacketType::PublicKeyNonce => {
-                    let data_pkt: Result<&HandshakePacket, _> = interpret_packet(&pkt);
-                    match data_pkt {
-                        Ok(ref data_pkt) => {
-                            conn.add_remote_key(&data_pkt.public_key, &data_pkt.nonce);
-                            conn.state = ConnectionState::ServerSendPubKey;
-                        },
-                        Err(_) => {
-                            error = true;
-                        },
-                    }
-                },
-                _ => { error = true; }
-            }
-        },
-        ConnectionState::ServerWaitAck(_t) => {
-            match pkt.kind() {
-                PacketType::PubKeyAck => {
-                    conn.state = ConnectionState::ServerSendChallenge;
-                },
-                _ => { error = true; }
-            }
-        },
-        ConnectionState::ServerWaitAuth(_t) => {
-            match pkt.kind() {
-                PacketType::AuthResponse => {
-                    match interpret_packet_extra::<EncryptedPacket>(&pkt) {
-                        Ok((data_pkt, rest)) => {
-                            let ciphertext = &rest[..data_pkt.data_len as usize];
-                            let tag = &rest[data_pkt.data_len as usize..];
-                            let aad = [];
-                            let mut plaintext = Vec::with_capacity(ciphertext.len());
-                            let session_key = match conn.local_key.session {
-                                Some(ref k) => k,
-                                None => {
-                                    conn.reset_state(None);
-                                    return Err(OssuaryError::InvalidKey);
-                                }
-                            };
-                            let remote_nonce = match conn.remote_key {
-                                Some(ref rem) => rem.nonce,
-                                None => {
-                                    conn.reset_state(None);
-                                    return Err(OssuaryError::InvalidKey);
-                                }
-                            };
-                            decrypt(session_key.as_bytes(),
-                                    &remote_nonce,
-                                    &aad, &ciphertext, &tag, &mut plaintext)?;
-                            let pubkey = &plaintext[0..32];
-                            let sig = &plaintext[32..];
-                            if conn.authorized_keys.iter().filter(
-                                |k| &pubkey == k).count() > 0 {
-                                let public = match PublicKey::from_bytes(pubkey) {
-                                    Ok(p) => p,
-                                    Err(_) => {
-                                        conn.reset_state(None);
-                                        return Err(OssuaryError::InvalidKey);
-                                    }
-                                };
-                                let sig = match Signature::from_bytes(sig) {
-                                    Ok(s) => s,
-                                    Err(_) => {
-                                        conn.reset_state(None);
-                                        return Err(OssuaryError::InvalidKey);
-                                    }
-                                };
-                                let challenge = match conn.challenge {
-                                    Some(ref c) => c,
-                                    None => {
-                                        conn.reset_state(None);
-                                        return Err(OssuaryError::InvalidKey);
-                                    }
-                                };
-                                match public.verify(challenge, &sig) {
-                                    Ok(_) => {
-                                        conn.state = ConnectionState::Encrypted;
-                                    },
-                                    Err(_) => {
-                                        println!("Verify bad");
-                                        conn.state = ConnectionState::Failed(
-                                            OssuaryError::InvalidSignature);
-                                    },
-                                }
-                            }
-                            else {
-                                println!("Key not allowed");
-                                conn.state = ConnectionState::Failed(OssuaryError::InvalidKey);
-                            }
-                        },
-                        Err(_) => {
-                            conn.reset_state(None);
-                            return Err(OssuaryError::InvalidPacket("Response invalid".into()));
-                        },
-                    };
-                },
-                _ => { error = true; }
-            }
-        },
-        ConnectionState::ClientWaitKey(_t) => {
-            match pkt.kind() {
-                PacketType::PublicKeyNonce => {
-                    let data_pkt: Result<&HandshakePacket, _> = interpret_packet(&pkt);
-                    match data_pkt {
-                        Ok(data_pkt) => {
-                            conn.add_remote_key(&data_pkt.public_key, &data_pkt.nonce);
-                            conn.state = ConnectionState::ClientSendAck;
-                        },
-                        Err(_) => {
-                            error = true;
-                        },
-                    }
-                },
-                _ => {
-                    error = true;
-                }
-            }
-        },
-        ConnectionState::ClientWaitAck(_t) => {
-            match pkt.kind() {
-                PacketType::PubKeyAck => {
-                    conn.state = ConnectionState::Encrypted;
-                },
-                PacketType::AuthChallenge => {
-                    match interpret_packet_extra::<EncryptedPacket>(&pkt) {
-                        Ok((data_pkt, rest)) => {
-                            let ciphertext = &rest[..data_pkt.data_len as usize];
-                            let tag = &rest[data_pkt.data_len as usize..];
-                            let aad = [];
-                            let mut plaintext = Vec::with_capacity(ciphertext.len());
-
-                            let session_key = match conn.local_key.session {
-                                Some(ref k) => k,
-                                None => {
-                                    conn.reset_state(None);
-                                    return Err(OssuaryError::InvalidKey);
-                                }
-                            };
-                            let remote_nonce = match conn.remote_key {
-                                Some(ref rem) => rem.nonce,
-                                None => {
-                                    conn.reset_state(None);
-                                    return Err(OssuaryError::InvalidKey);
-                                }
-                            };
-                            decrypt(session_key.as_bytes(),
-                                    &remote_nonce,
-                                    &aad, &ciphertext, &tag, &mut plaintext)?;
-                            conn.challenge = Some(plaintext);
-                            conn.state = ConnectionState::ClientSendAuth;
-                        },
-                        Err(_) => {
-                            error = true;
-                        },
-                    }
-                },
-                _ => {
-                    error = true;
-                },
-            }
-        },
-        ConnectionState::ServerSendPubKey |
-        ConnectionState::ServerSendChallenge |
-        ConnectionState::ClientNew |
-        ConnectionState::ClientSendAck |
-        ConnectionState::ClientSendAuth |
-        ConnectionState::Encrypted => {
-            // no-op
-        },
-        ConnectionState::Failed(_) => {
-            error = true;
-        },
-    }
-    if error {
-        conn.reset_state(None);
-        return Err(OssuaryError::ConnectionReset);
-    }
-    Ok(bytes_read)
-}
-
-/// Returns whether the handshake process is complete.
-///
-///
-pub fn crypto_handshake_done(conn: &ConnectionContext) -> Result<bool, &OssuaryError> {
-    match conn.state {
-        ConnectionState::Encrypted => Ok(true),
-        ConnectionState::Failed(ref e) => Err(e),
-        _ => Ok(false),
-    }
-}
-
-pub fn crypto_send_data<T,U>(conn: &mut ConnectionContext,
-                             in_buf: &[u8],
-                             mut out_buf: T) -> Result<usize, OssuaryError>
-where T: std::ops::DerefMut<Target = U>,
-      U: std::io::Write {
-    // Try to send any unsent buffered data
-    match write_stored_packet(conn, &mut out_buf) {
-        Ok(w) if w == 0 => {},
-        Ok(w) => return Err(OssuaryError::WouldBlock(w)),
-        Err(e) => return Err(e),
-    }
-    match conn.state {
-        ConnectionState::Encrypted => {},
-        _ => {
-            return Err(OssuaryError::InvalidPacket(
-                "Encrypted channel not established.".into()));
-        }
-    }
-    let aad = [];
-    let mut ciphertext = Vec::with_capacity(in_buf.len());
-    let session_key = match conn.local_key.session {
-        Some(ref k) => k,
-        None => {
-            conn.reset_state(None);
-            return Err(OssuaryError::InvalidKey);;
-        }
-    };
-    let tag = match encrypt(session_key.as_bytes(),
-                            &conn.local_key.nonce, &aad, in_buf, &mut ciphertext) {
-        Ok(t) => t,
-        Err(_) => {
-            conn.reset_state(None);
-            return Err(OssuaryError::InvalidKey);;
-        }
-    };
-
-    let pkt: EncryptedPacket = EncryptedPacket {
-        tag_len: tag.len() as u16,
-        data_len: ciphertext.len() as u16,
-    };
-    let mut buf: Vec<u8>= vec![];
-    buf.extend(struct_as_slice(&pkt));
-    buf.extend(&ciphertext);
-    buf.extend(&tag);
-    let written = write_packet(conn, &mut out_buf, &buf,
-                               PacketType::EncryptedData)?;
-    Ok(written)
-}
-
-pub fn crypto_recv_data<T,U,R,V>(conn: &mut ConnectionContext,
-                                 in_buf: T,
-                                 mut out_buf: R) -> Result<(usize, usize), OssuaryError>
-where T: std::ops::DerefMut<Target = U>,
-      U: std::io::Read,
-      R: std::ops::DerefMut<Target = V>,
-      V: std::io::Write {
-    let bytes_written: usize;
-    let mut bytes_read: usize = 0;
-    match conn.state {
-        ConnectionState::Encrypted => {},
-        _ => {
-            return Err(OssuaryError::InvalidPacket(
-                "Encrypted channel not established.".into()));
-        }
-    }
-
-    match read_packet(conn, in_buf) {
-        Ok((pkt, bytes)) => {
-            bytes_read += bytes;
-            if pkt.header.msg_id != conn.remote_msg_id {
-                let msg_id = pkt.header.msg_id;
-                println!("Message gap detected.  Restarting connection. ({} != {})",
-                         msg_id, conn.remote_msg_id);
-                println!("Server: {}", conn.is_server());
-                conn.reset_state(None);
-                return Err(OssuaryError::InvalidPacket("Message ID mismatch".into()))
-            }
-            conn.remote_msg_id = pkt.header.msg_id + 1;
-
-            match pkt.kind() {
-                PacketType::EncryptedData => {
-                    match interpret_packet_extra::<EncryptedPacket>(&pkt) {
-                        Ok((data_pkt, rest)) => {
-                            let ciphertext = &rest[..data_pkt.data_len as usize];
-                            let tag = &rest[data_pkt.data_len as usize..];
-                            let aad = [];
-                            let mut plaintext = Vec::with_capacity(ciphertext.len());
-                            let session_key = match conn.local_key.session {
-                                Some(ref k) => k,
-                                None => {
-                                    conn.reset_state(None);
-                                    return Err(OssuaryError::InvalidKey);
-                                }
-                            };
-                            let remote_nonce = match conn.remote_key {
-                                Some(ref rem) => rem.nonce,
-                                None => {
-                                    conn.reset_state(None);
-                                    return Err(OssuaryError::InvalidKey);
-                                }
-                            };
-                            decrypt(session_key.as_bytes(),
-                                    &remote_nonce,
-                                    &aad, &ciphertext, &tag, &mut plaintext)?;
-                            bytes_written = match out_buf.write(&plaintext) {
-                                Ok(w) => w,
-                                Err(e) => return Err(e.into()),
-                            };
-                        },
-                        Err(_) => {
-                            conn.reset_state(None);
-                            return Err(OssuaryError::InvalidKey);
-                        },
-                    }
-                },
-                _ => {
-                    return Err(OssuaryError::InvalidPacket(
-                        "Received non-encrypted data on encrypted channel.".into()));
-                },
-            }
-        },
-        Err(OssuaryError::WouldBlock(b)) => {
-            return Err(OssuaryError::WouldBlock(b));
-        },
-        Err(_e) => {
-            conn.reset_state(None);
-            return Err(OssuaryError::InvalidPacket("Packet header did not parse.".into()));
-        },
-    }
-    Ok((bytes_read, bytes_written))
-}
-
-pub fn crypto_flush<R,V>(conn: &mut ConnectionContext,
-                         mut out_buf: R) -> Result<usize, OssuaryError>
-where R: std::ops::DerefMut<Target = V>,
-      V: std::io::Write {
-    return write_stored_packet(conn, &mut out_buf);
 }
 
 #[cfg(test)]
