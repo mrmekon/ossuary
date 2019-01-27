@@ -33,10 +33,11 @@ fn server() -> Result<(), std::io::Error> {
 
         while ossuary_handshake_done(conn) == 0 {
             let mut out_len = out_buf.len() as u16;
-            let more = ossuary_send_handshake(conn, (&out_buf) as *const u8 as *mut u8, &mut out_len);
-            let _ = stream.write_all(&out_buf[0..out_len as usize]).unwrap();
-
-            if more >= 0 {
+            let wrote = ossuary_send_handshake(conn,
+                                               (&out_buf) as *const u8 as *mut u8,
+                                               &mut out_len);
+            if wrote >= 0 {
+                let _ = stream.write_all(&out_buf[0..wrote as usize]).unwrap();
                 let in_buf = reader.fill_buf().unwrap();
                 let mut in_len = in_buf.len() as u16;
                 if in_len > 0 {
@@ -100,13 +101,16 @@ fn client() -> Result<(), std::io::Error> {
     let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
     while ossuary_handshake_done(conn) == 0 {
         let mut out_len = out_buf.len() as u16;
-        let more = ossuary_send_handshake(conn, (&out_buf) as *const u8 as *mut u8, &mut out_len);
-        let _ = stream.write_all(&out_buf[0.. out_len as usize]).unwrap();
-
-        if more >= 0 {
+        let wrote = ossuary_send_handshake(conn,
+                                           (&out_buf) as *const u8 as *mut u8,
+                                           &mut out_len);
+        if wrote >= 0 {
+            let _ = stream.write_all(&out_buf[0.. wrote as usize]).unwrap();
             let in_buf = reader.fill_buf().unwrap();
             let mut in_len = in_buf.len() as u16;
-            let len = ossuary_recv_handshake(conn, in_buf as *const [u8] as *const u8, &mut in_len);
+            let len = ossuary_recv_handshake(conn,
+                                             in_buf as *const [u8] as *const u8,
+                                             &mut in_len);
             reader.consume(len as usize);
         }
     }
@@ -122,10 +126,10 @@ fn client() -> Result<(), std::io::Error> {
         &mut out_len);
     let _ = stream.write_all(&out_buf[0..sz as usize]).unwrap();
 
-    let mut stream = std::io::BufReader::new(stream);
+    //let mut stream = std::io::BufReader::new(stream);
     let mut count = 0;
     loop {
-        let in_buf = stream.fill_buf().unwrap();
+        let in_buf = reader.fill_buf().unwrap();
         if in_buf.len() == 0 || count == 2 {
             break;
         }
@@ -141,7 +145,7 @@ fn client() -> Result<(), std::io::Error> {
         if len > 0 {
             println!("CLIB READ: {:?}",
                      std::str::from_utf8(&out_buf[0..out_len as usize]).unwrap());
-            stream.consume(len as usize);
+            reader.consume(len as usize);
             count += 1;
         }
     }
