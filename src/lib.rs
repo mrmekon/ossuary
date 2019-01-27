@@ -4,15 +4,11 @@ extern crate x25519_dalek;
 extern crate ed25519_dalek;
 extern crate rand;
 extern crate chacha20_poly1305_aead;
-extern crate sha2;
 
 use chacha20_poly1305_aead::{encrypt,decrypt};
-use x25519_dalek::generate_secret;
-use x25519_dalek::generate_public;
-use x25519_dalek::diffie_hellman;
+use x25519_dalek::{EphemeralSecret, EphemeralPublic, SharedSecret};
 
 use ed25519_dalek::{Signature, Keypair, SecretKey, PublicKey};
-use sha2::Sha512;
 
 //use rand::thread_rng;
 use rand::RngCore;
@@ -230,10 +226,11 @@ enum ConnectionState {
     Failed(OssuaryError),
     Encrypted,
 }
+
 struct KeyMaterial {
-    secret: Option<[u8; 32]>,
+    secret: Option<EphemeralSecret>,
     public: [u8; 32],
-    session: Option<[u8; 32]>,
+    session: Option<SharedSecret>,
     nonce: [u8; 12],
 }
 impl Default for KeyMaterial {
@@ -247,6 +244,7 @@ impl Default for KeyMaterial {
     }
 }
 
+#[derive(Clone)]
 pub enum ConnectionType {
     Client,
     AuthenticatedServer,
@@ -256,15 +254,15 @@ pub enum ConnectionType {
 pub struct ConnectionContext {
     state: ConnectionState,
     conn_type: ConnectionType,
-    local_key: KeyMaterial,
-    remote_key: Option<KeyMaterial>,
+    local_key: KeyMaterial, // session key
+    remote_key: Option<KeyMaterial>, // session key
     local_msg_id: u16,
     remote_msg_id: u16,
     challenge: Option<Vec<u8>>,
     challenge_sig: Option<Vec<u8>>,
     authorized_keys: Vec<[u8; 32]>,
-    secret_key: Option<SecretKey>,
-    public_key: Option<PublicKey>,
+    secret_key: Option<SecretKey>, // authentication key
+    public_key: Option<PublicKey>, // authentication key
     read_buf: [u8; PACKET_BUF_SIZE],
     read_buf_used: usize,
     write_buf: [u8; PACKET_BUF_SIZE],
@@ -295,13 +293,13 @@ impl ConnectionContext {
     pub fn new(conn_type: ConnectionType) -> ConnectionContext {
         //let mut rng = thread_rng();
         let mut rng = OsRng::new().expect("RNG not available.");
-        let sec_key = generate_secret(&mut rng);
-        let pub_key = generate_public(&sec_key);
+        let sec_key = EphemeralSecret::new(&mut rng);
+        let pub_key = EphemeralPublic::from(&sec_key);
         let mut nonce: [u8; 12] = [0; 12];
         rng.fill_bytes(&mut nonce);
         let key = KeyMaterial {
             secret: Some(sec_key),
-            public: pub_key.to_bytes(),
+            public: *pub_key.as_bytes(),
             nonce: nonce,
             session: None,
         };
@@ -316,7 +314,7 @@ impl ConnectionContext {
         }
     }
     fn reset_state(&mut self, permanent_err: Option<OssuaryError>) {
-        let default: ConnectionContext = Default::default();
+        let default = ConnectionContext::new(self.conn_type.clone());
         *self = default;
         self.state = match permanent_err {
             None => {
@@ -344,8 +342,9 @@ impl ConnectionContext {
             session: None,
         };
         self.remote_key = Some(key);
-        if let Some(secret) = self.local_key.secret.as_ref() {
-            self.local_key.session = Some(diffie_hellman(secret, public));
+        let secret = self.local_key.secret.take();
+        if let Some(secret) = secret {
+            self.local_key.session = Some(secret.diffie_hellman(&EphemeralPublic::from(*public)));
         }
     }
     pub fn set_authorized_keys<'a,T>(&mut self, keys: T) -> Result<usize, OssuaryError>
@@ -367,7 +366,7 @@ impl ConnectionContext {
             return Err(OssuaryError::KeySize(32, key.len()));
         }
         let secret = SecretKey::from_bytes(key)?;
-        let public = PublicKey::from_secret::<Sha512>(&secret);
+        let public = PublicKey::from(&secret);
         self.secret_key = Some(secret);
         self.public_key = Some(public);
         Ok(())
@@ -555,7 +554,7 @@ where T: std::ops::DerefMut<Target = U>,
                             return Err(OssuaryError::InvalidKey);
                         }
                     };
-                    let tag = match encrypt(session_key,
+                    let tag = match encrypt(session_key.as_bytes(),
                                             &conn.local_key.nonce,
                                             &aad, &challenge, &mut ciphertext) {
                         Ok(tag) => tag,
@@ -622,10 +621,10 @@ where T: std::ops::DerefMut<Target = U>,
                     return Err(OssuaryError::InvalidKey);
                 }
             };
-            let public = PublicKey::from_secret::<Sha512>(&secret);
+            let public = PublicKey::from(&secret);
             let keypair = Keypair { secret: secret, public: public };
             let sig = match conn.challenge {
-                Some(ref c) => keypair.sign::<Sha512>(c).to_bytes(),
+                Some(ref c) => keypair.sign(c).to_bytes(),
                 None => {
                     conn.reset_state(None);
                     return Err(OssuaryError::InvalidSignature);
@@ -645,7 +644,7 @@ where T: std::ops::DerefMut<Target = U>,
                     return Err(OssuaryError::InvalidKey);
                 }
             };
-            let tag = match encrypt(session_key,
+            let tag = match encrypt(session_key.as_bytes(),
                                     &conn.local_key.nonce,
                                     &aad, &pkt_data, &mut ciphertext) {
                 Ok(t) => t,
@@ -700,6 +699,7 @@ where T: std::ops::DerefMut<Target = U>,
             return Err(OssuaryError::WouldBlock(b));
         }
         Err(e) => {
+            conn.reset_state(None);
             return Err(e);
         }
     };
@@ -774,7 +774,7 @@ where T: std::ops::DerefMut<Target = U>,
                                     return Err(OssuaryError::InvalidKey);
                                 }
                             };
-                            decrypt(session_key,
+                            decrypt(session_key.as_bytes(),
                                     &remote_nonce,
                                     &aad, &ciphertext, &tag, &mut plaintext)?;
                             let pubkey = &plaintext[0..32];
@@ -802,7 +802,7 @@ where T: std::ops::DerefMut<Target = U>,
                                         return Err(OssuaryError::InvalidKey);
                                     }
                                 };
-                                match public.verify::<Sha512>(challenge, &sig) {
+                                match public.verify(challenge, &sig) {
                                     Ok(_) => {
                                         conn.state = ConnectionState::Encrypted;
                                     },
@@ -873,7 +873,7 @@ where T: std::ops::DerefMut<Target = U>,
                                     return Err(OssuaryError::InvalidKey);
                                 }
                             };
-                            decrypt(session_key,
+                            decrypt(session_key.as_bytes(),
                                     &remote_nonce,
                                     &aad, &ciphertext, &tag, &mut plaintext)?;
                             conn.challenge = Some(plaintext);
@@ -903,6 +903,7 @@ where T: std::ops::DerefMut<Target = U>,
     }
     if error {
         conn.reset_state(None);
+        return Err(OssuaryError::ConnectionReset);
     }
     Ok(bytes_read)
 }
@@ -942,7 +943,7 @@ where T: std::ops::DerefMut<Target = U>,
             return Err(OssuaryError::InvalidKey);;
         }
     };
-    let tag = match encrypt(session_key,
+    let tag = match encrypt(session_key.as_bytes(),
                             &conn.local_key.nonce, &aad, in_buf, &mut ciphertext) {
         Ok(t) => t,
         Err(_) => {
@@ -1016,7 +1017,7 @@ where T: std::ops::DerefMut<Target = U>,
                                     return Err(OssuaryError::InvalidKey);
                                 }
                             };
-                            decrypt(session_key,
+                            decrypt(session_key.as_bytes(),
                                     &remote_nonce,
                                     &aad, &ciphertext, &tag, &mut plaintext)?;
                             bytes_written = match out_buf.write(&plaintext) {
@@ -1040,6 +1041,7 @@ where T: std::ops::DerefMut<Target = U>,
             return Err(OssuaryError::WouldBlock(b));
         },
         Err(_e) => {
+            conn.reset_state(None);
             return Err(OssuaryError::InvalidPacket("Packet header did not parse.".into()));
         },
     }

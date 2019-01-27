@@ -19,8 +19,7 @@ incremental = true
 overflow-checks = false
 
 [dependencies]
-x25519-dalek = "0.3.0"
-ed25519-dalek = "0.8.1"
-chacha20-poly1305-aead = "0.1.2"
-sha2 = "0.7"
-rand = "0.6.1"
+x25519-dalek = "=0.4.4"
+ed25519-dalek = "=1.0.0-pre.1"
+chacha20-poly1305-aead = "=0.1.2"
+rand = "=0.6.4"
