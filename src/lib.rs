@@ -1,4 +1,20 @@
 #![feature(try_from)]
+//! # Ossuary
+//!
+//! Ossuary is a library for establishing an encrypted and authenticated
+//! communication channel between a client and a server.
+//!
+//
+// TODO:
+//  - move all the crypto_* functions into ConnectionContext
+//    - rename to OssuaryConnection
+//    - drop the crypto_ prefixes
+//  - server certificate
+//  - consider all unexpected packet types to be errors
+//  - ensure that a reset on one end always sends a reset to the other
+//  - limit connection retries
+//  - protocol version number
+//
 
 extern crate x25519_dalek;
 extern crate ed25519_dalek;
@@ -30,47 +46,6 @@ const PACKET_BUF_SIZE: usize = 16384
     + ::std::mem::size_of::<EncryptedPacket>()
     + 16; // chacha20 tag
 
-//
-// API:
-//  * sock -- TCP data socket
-//  * data -- unencrypted data to send
-// Goal:
-//  Encrypt data, then HMAC data.  Send both.
-//  First a handshake is performed:
-//    while (!handshake_done):
-//      write(sock, crypto_send_handshake())
-//      crypto_read_handshake(read(sock))
-//  Each data packet to send is given to a crypto_prepare() function
-//  Result of crypto_wrap() is put on sock.
-//  Response from sock is put in crypto_unwrap()
-//  Crypto module internal data:
-//   * nonce -- random session counter from server (12 bytes)
-//   * local_msg_id -- ID of current message, incremented for each sent message
-//   * remote_msg_id -- ID of current message, incremented for each received message
-//   * priv_key -- random session private key
-//   * pub_key -- pub key matching priv_key
-//   * sess_key -- ECDH shared session key
-//   * edata -- data encrypted with sess_key, nonce + msg_id
-//   * hmac -- hmac of encrypted data
-//  Each crypto call returns a data struct with:
-//   * as_bytes() -- return something suitable for sticking directly on socket
-//   * data() -- return the encrypted data buffer
-//   * hmac() -- return the HMAC of the encrypted data
-//   * nonce() -- return the session nonce
-//   * msg_id() -- msg_id encoded in this data
-//  Message:
-//   * msg_id: u32 (unencrypted)
-//   * data_len: u32 (unencrypted)
-//   * hmac_len: u8 (unencrypted) (always 16)
-//   * hmac (unencrypted)
-//   * data (encrypted)
-//
-
-// TODO:
-//  - consider all unexpected packet types to be errors
-//  - limit connection retries
-//  - protocol version number
-
 fn struct_as_slice<T: Sized>(p: &T) -> &[u8] {
     unsafe {
         ::std::slice::from_raw_parts(
@@ -88,16 +63,101 @@ fn slice_as_struct<T>(p: &[u8]) -> Result<&T, OssuaryError> {
     }
 }
 
+/// Error produced by Ossuary or one of its dependencies
 pub enum OssuaryError {
+    /// A problem with I/O read or writes.
+    ///
+    /// An Io error is most likely raised when using an input or output buffer
+    /// that is more complex than a simple in-memory buffer, such as a
+    /// [`std::net::TcpStream`]
     Io(std::io::Error),
+
+    /// A buffer cannot complete a read/write without blocking.
+    ///
+    /// Ossuary is inherently a non-blocking library, and returns this error any
+    /// time it is unable to read or write more data.
+    ///
+    /// When using a buffer configured for non-blocking operation, such as a
+    /// [`std::net::TcpStream`], any non-blocking errors
+    /// ([`std::io::ErrorKind::WouldBlock`]) encounted by the buffer are raised
+    /// as this error.
+    ///
+    /// The error has a paired parameter indicating whether any data WAS read
+    /// or written (depending on the function called).  This can be non-zero
+    /// on operations that require multiple consecutive read/write operations
+    /// to the buffer if some but not all operations succeeded.
+    ///
+    /// When using an input or output buffer in a manner that requires manually
+    /// sending or clearing data from the buffer, such as when passing the data
+    /// from Ossuary through an in-memory buffer prior to handing it to a TCP
+    /// connection, the amount of bytes indicated by the paired parameter should
+    /// be processed immediately.
     WouldBlock(usize), // bytes consumed
+
+    /// Error casting received bytes to a primitive type.
+    ///
+    /// This error likely indicates a sync or corruption error in the data
+    /// stream, and will trigger a connection reset.
     Unpack(core::array::TryFromSliceError),
+
+    /// An invalid sized encryption key was encountered.
+    ///
+    /// This error is most likely caused by an attempt to register an invalid
+    /// secret or public key in [`ConnectionContext::set_authorized_keys`] or
+    /// [`ConnectionContext::set_secret_key`].  Both should be 32 bytes.
     KeySize(usize, usize), // (expected, actual)
+
+    /// An error occurred when parsing or using an encryption key.
+    ///
+    /// This error indicates a problem when using an encryption key.  This could
+    /// be because an expected key is missing, the format is incorrect, it was
+    /// corrupted in memory or in transit, or the wrong key was used.
+    ///
+    /// This typically indicates an internal error, and will cause the
+    /// connection to reset.
     InvalidKey,
+
+    /// The channel received an unexpected or malformed packet
+    ///
+    /// The associated string may describe the problem that went wrong.  This
+    /// might be encountered if packets are duplicated, dropped, or corrupted.
+    /// It typically indicates an internal error, and the connection will reset.
     InvalidPacket(String),
+
+    /// Error casting a received packet to an internal struct format.
+    ///
+    /// This means a packet header was not found or corrupted, and will trigger
+    /// a connection reset.
     InvalidStruct,
+
+    /// The signature received from a client failed to verify.
+    ///
+    /// This either indicates a key mismatch (public and secret keys are not
+    /// a valid pair), corruption in the stream, or a problem during the
+    /// handshake.  The connection will reset.
     InvalidSignature,
+
+    /// The connection has reset, and reconnection may be possible.
+    ///
+    /// Ossuary does not attempt to recover from errors encountered on the data
+    /// stream.  If anything has gone wrong, it resets the connection.  When one
+    /// side resets, it always tells the other side to reset as well.
+    ///
+    /// This error indicates that whatever went wrong may have been a temporal
+    /// fluke, such as momentary corruption or a sync error.  Reconnection with
+    /// the same context may be possible.  This must be handled by returning to
+    /// the handshake loop.
     ConnectionReset,
+
+    /// The connection has reset, and reconnection is not suggested.
+    ///
+    /// This indicates that an error has occurred that Ossuary suspects is
+    /// permanent, and that a reconnect will not succeed.  Errors include
+    /// failed authorization, such as a connection attempt fro a client whose
+    /// public key is not authorized.
+    ///
+    /// When one side fails, it attempts to trigger a failure on the other side
+    /// as well.
     ConnectionFailed,
 }
 impl std::fmt::Debug for OssuaryError {
@@ -141,6 +201,8 @@ impl From<chacha20_poly1305_aead::DecryptError> for OssuaryError {
     }
 }
 
+/// Represents the packet sent during client/server handshaking to exchange
+/// ephemeral session public keys and random nonces.
 #[repr(C,packed)]
 struct HandshakePacket {
     len: u16,
@@ -159,20 +221,30 @@ impl Default for HandshakePacket {
     }
 }
 
+/// The packet types used by the Ossuary protocol.
 #[repr(u16)]
 #[derive(Clone, Copy)]
 enum PacketType {
+    /// Should never be encountered.
     Unknown = 0x00,
+    /// Tell other side of connection to disconnect permanently.
     Disconnect = 0x01,
+    /// Tell other side to reset connection, but re-handshaking is allowed.
     Reset = 0x02,
+    /// Packet containing ephemeral session public key and nonce.
     PublicKeyNonce = 0x10,
+    /// Acknowledgement of receiving session public key/nonce
     PubKeyAck = 0x11,
+    /// Request for an authentication signature on a given random challenge
     AuthChallenge = 0x12,
+    /// Authentication response with a public key and signed challenge
     AuthResponse = 0x13,
+    /// Encrypted data packet
     EncryptedData = 0x20,
 }
 impl PacketType {
-    pub fn from_u16(i: u16) -> PacketType {
+    /// Convert u16 integer to a PacketType enum
+    fn from_u16(i: u16) -> PacketType {
         match i {
             0x01 => PacketType::Disconnect,
             0x02 => PacketType::Reset,
@@ -186,22 +258,32 @@ impl PacketType {
     }
 }
 
+/// Header prepended to the front of all encrypted data packets.
 #[repr(C,packed)]
 struct EncryptedPacket {
+    /// Length of the data (not including this header or HMAC tag)
     data_len: u16,
+    /// Length of HMAC tag following the data
     tag_len: u16,
 }
 
+/// Header prepended to the front of all packets, regardless of encryption.
 #[repr(C,packed)]
 struct PacketHeader {
+    /// Length of packet (not including this header)
     len: u16,
+    /// Monotonically increasing message ID.
     msg_id: u16,
+    /// The type of packet being sent.
     packet_type: PacketType,
+    /// Reserved for future use.
     _reserved: u16,
 }
 
+/// Internal struct for holding a complete network packet
 struct NetworkPacket {
     header: PacketHeader,
+    /// Data.  If encrypted, also EncryptedPacket header and HMAC tag.
     data: Box<[u8]>,
 }
 impl NetworkPacket {
@@ -210,20 +292,34 @@ impl NetworkPacket {
     }
 }
 
+/// Internal state of ConnectionContext state machine.
 enum ConnectionState {
+    /// Idle server witing for a connection
     ServerNew,
+    /// Server will send session public key and nonce next
     ServerSendPubKey,
+    /// Server is waiting for an acknowledgement of its pubkey/nonce
     ServerWaitAck(std::time::SystemTime),
+    /// Server will send an authentication challenge next
     ServerSendChallenge,
+    /// Server waiting for a signed authentication response
     ServerWaitAuth(std::time::SystemTime),
 
+    /// Client will send a session public key and nonce next
     ClientNew,
+    /// Client waiting for pubkey/nonce from server
     ClientWaitKey(std::time::SystemTime),
+    /// Client will send a pubkey/nonce acknowledgement next
     ClientSendAck,
+    /// Client waiting for connection success or authentication challenge
     ClientWaitAck(std::time::SystemTime),
+    /// Client will send a signed authentication response next
     ClientSendAuth,
 
+    /// Connection has failed because of the associated error.
     Failed(OssuaryError),
+
+    /// Connection is established, encrypted, and optionally authenticated.
     Encrypted,
 }
 
@@ -244,13 +340,51 @@ impl Default for KeyMaterial {
     }
 }
 
+/// Enum specifying the client or server role of a [`ConnectionContext`]
 #[derive(Clone)]
 pub enum ConnectionType {
+    /// This context is a client
     Client,
+
+    /// This context is a server that requires authentication.
+    ///
+    /// Authenticated servers only allow connections from clients with secret
+    /// keys set using [`ConnectionContext::set_secret_key`], and with the
+    /// matching public key registered with the server using
+    /// [`ConnectionContext::set_authorized_keys`].
     AuthenticatedServer,
+
+    /// This context is a server that does not support authentication.
+    ///
+    /// Unauthenticated servers allow any client to connect, and skip the
+    /// authentication stages of the handshake.  This can be used for services
+    /// that are open to the public, but still want to prevent snooping or
+    /// man-in-the-middle attacks by using an encrypted channel.
     UnauthenticatedServer,
 }
 
+/// Context for interacting with an encrypted communication channel
+///
+/// All interaction with ossuary's encrypted channels is performed via a
+/// ConnectionContext instance.  It holds all of the state required to maintain
+/// one side of an encrypted connection.
+///
+/// A context is created with [`ConnectionContext::new`], passing it a
+/// [`ConnectionType`] identifying whether it is to act as a client or server.
+/// Server contexts can optionally require authentication, verified by providing
+/// a list of public keys of permitted clients with
+/// [`ConnectionContext::set_authorized_keys`].  Clients, on the other hand,
+/// authenticate by setting their secret key with
+/// [`ConnectionContext::set_secret_key`].
+///
+/// A server must create one ConnectionContext per connected client.  Multiple
+/// connections cannot be multiplexed in one context.
+///
+/// A ConnectionContext keeps temporary buffers for both received and soon-to-be
+/// transmitted data.  This means they are not particularly small objects, but
+/// in exchange they can read and write from/to streams set in non-blocking mode
+/// without blocking single-threaded applications.
+///
 pub struct ConnectionContext {
     state: ConnectionState,
     conn_type: ConnectionType,
@@ -290,6 +424,10 @@ impl Default for ConnectionContext {
     }
 }
 impl ConnectionContext {
+    /// Allocate a new ConnectionContext.
+    ///
+    /// `conn_type` is a [`ConnectionType`] indicating whether this instance
+    /// is for a client or server.
     pub fn new(conn_type: ConnectionType) -> ConnectionContext {
         //let mut rng = thread_rng();
         let mut rng = OsRng::new().expect("RNG not available.");
@@ -313,6 +451,20 @@ impl ConnectionContext {
             ..Default::default()
         }
     }
+
+    /// Reset the context back to its default state.
+    ///
+    /// If `permanent_err` is None, this connection can be re-established by
+    /// calling the connection handshake functions.  This indicates that
+    /// something unexpected went wrong with the connection, such as an invalid
+    /// state or corrupt data, such that reestablishing the connection may fix
+    /// it.
+    ///
+    /// If `permanent_err` is set to some error, it indicates a permanent
+    /// failure on this connection, and attempting to reestablish it will likely
+    /// not work.  This includes situations where the server has rejected the
+    /// connection, such as when the client's key is not authorized.
+    ///
     fn reset_state(&mut self, permanent_err: Option<OssuaryError>) {
         let default = ConnectionContext::new(self.conn_type.clone());
         *self = default;
@@ -328,12 +480,14 @@ impl ConnectionContext {
             }
         };
     }
+    /// Whether this context represents a server (as opposed to a client).
     fn is_server(&self) -> bool {
         match self.conn_type {
             ConnectionType::Client => false,
             _ => true,
         }
     }
+    /// Add key received from a remote connection and generate session key
     fn add_remote_key(&mut self, public: &[u8; 32], nonce: &[u8; 12]) {
         let key = KeyMaterial {
             secret: None,
@@ -347,6 +501,20 @@ impl ConnectionContext {
             self.local_key.session = Some(secret.diffie_hellman(&EphemeralPublic::from(*public)));
         }
     }
+    /// Add public keys of clients permitted to connect to this server.
+    ///
+    /// `keys` must be an iterable of `&[u8]` slices containing valid 32-byte
+    /// ed25519 public keys.  During the handshake, a client will be required
+    /// to sign a challenge with its secret signing key.  The client sends the
+    /// public key it signed with and the resulting signature, and the server
+    /// validates that the public key is in this provided list of keys prior
+    /// to validating the signature.
+    ///
+    /// If a client attempts to connect with a key not matching one of these
+    /// provided keys, a permanent connection failure is raised on both ends.
+    ///
+    /// **NOTE:** keys are only checked if the context was created with
+    /// [`ConnectionType::AuthenticatedServer`].
     pub fn set_authorized_keys<'a,T>(&mut self, keys: T) -> Result<usize, OssuaryError>
     where T: std::iter::IntoIterator<Item = &'a [u8]> {
         let mut count: usize = 0;
@@ -361,6 +529,19 @@ impl ConnectionContext {
         }
         Ok(count)
     }
+    /// Add client's authentication secret signing key
+    ///
+    /// ´key` must be a `&[u8]` slice containing a valid 32-byte ed25519
+    /// signing key.  Signing keys should be kept secret and should be stored
+    /// securely.
+    ///
+    /// This key is used to authenticate during the handshake if the remote
+    /// server requires authentication.  During the handshake, the server will
+    /// send a challenge (a buffer of random bytes) which the client signs
+    /// with this secret key.  The client returns its public key and the
+    /// signature of the challenge data to identify which key it is using for
+    /// authentication, and to prove possession of the secret key.
+    ///
     pub fn set_secret_key(&mut self, key: &[u8]) -> Result<(), OssuaryError> {
         if key.len() != 32 {
             return Err(OssuaryError::KeySize(32, key.len()));
@@ -371,6 +552,12 @@ impl ConnectionContext {
         self.public_key = Some(public);
         Ok(())
     }
+    /// Get the client's authentication public verification key
+    ///
+    /// When a secret key is set with [`ConnectionContext::set_secret_key`], the
+    /// matching public key is calculated.  This function returns that public
+    /// key, which can be shared with a remote server for future authentication.
+    ///
     pub fn public_key(&self) -> Result<&[u8], OssuaryError> {
         match self.public_key {
             None => Err(OssuaryError::InvalidKey),
@@ -381,17 +568,24 @@ impl ConnectionContext {
     }
 }
 
+/// Cast the data bytes in a NetworkPacket into a struct
 fn interpret_packet<'a, T>(pkt: &'a NetworkPacket) -> Result<&'a T, OssuaryError> {
     let s: &T = slice_as_struct(&pkt.data)?;
     Ok(s)
 }
 
+/// Cast the data bytes in a NetworkPacket into a struct, and also return the
+/// remaining unused bytes if the data is larger than the struct.
 fn interpret_packet_extra<'a, T>(pkt: &'a NetworkPacket)
                                  -> Result<(&'a T, &'a [u8]), OssuaryError> {
     let s: &T = slice_as_struct(&pkt.data)?;
     Ok((s, &pkt.data[::std::mem::size_of::<T>()..]))
 }
 
+/// Read a complete network packet from the input stream.
+///
+/// On success, returns a NetworkPacket struct containing the header and data,
+/// and a `usize` indicating how many bytes were consumed from the input buffer.
 fn read_packet<T,U>(conn: &mut ConnectionContext,
                     mut stream: T) ->Result<(NetworkPacket, usize), OssuaryError>
 where T: std::ops::DerefMut<Target = U>,
@@ -438,6 +632,12 @@ where T: std::ops::DerefMut<Target = U>,
     header_size + packet_len))
 }
 
+/// Write a packet from ConnectionContext's internal storage to the out buffer.
+///
+/// All packets are buffered to internal storage before writing, so this is
+/// the function responsible for putting all packets "on the wire".
+///
+/// On success, returns the number of bytes written to the output buffer
 fn write_stored_packet<T,U>(conn: &mut ConnectionContext,
                             stream: &mut T) -> Result<usize, OssuaryError>
 where T: std::ops::DerefMut<Target = U>,
@@ -467,6 +667,13 @@ where T: std::ops::DerefMut<Target = U>,
     Ok(written)
 }
 
+/// Write a packet to the ConnectionContext's internal packet buffer
+///
+/// All packets are buffered internally because there is no guarantee that a
+/// complete packet can be written without blocking, and Ossuary is a non-
+/// blocking library.
+///
+/// On success, returns the number of bytes written to the output buffer.
 fn write_packet<T,U>(conn: &mut ConnectionContext,
                      stream: &mut T, data: &[u8],
                      kind: PacketType) -> Result<usize, OssuaryError>
@@ -484,6 +691,11 @@ where T: std::ops::DerefMut<Target = U>,
     Ok(written)
 }
 
+/// Writes the next handshake packet to the output stream.
+///
+///
+///
+/// On success, returns the number of bytes written to the output buffer.
 pub fn crypto_send_handshake<T,U>(conn: &mut ConnectionContext,
                                   mut buf: T) -> Result<usize, OssuaryError>
 where T: std::ops::DerefMut<Target = U>,
@@ -679,6 +891,9 @@ where T: std::ops::DerefMut<Target = U>,
     Ok(written)
 }
 
+/// Receive the next handshake packet from the input buffer
+///
+/// On success, returns the number of bytes consumed from the input buffer.
 pub fn crypto_recv_handshake<T,U>(conn: &mut ConnectionContext,
                                   buf: T) -> Result<usize, OssuaryError>
 where T: std::ops::DerefMut<Target = U>,
@@ -908,6 +1123,9 @@ where T: std::ops::DerefMut<Target = U>,
     Ok(bytes_read)
 }
 
+/// Returns whether the handshake process is complete.
+///
+///
 pub fn crypto_handshake_done(conn: &ConnectionContext) -> Result<bool, &OssuaryError> {
     match conn.state {
         ConnectionState::Encrypted => Ok(true),
