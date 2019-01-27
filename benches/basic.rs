@@ -14,10 +14,10 @@ fn bench_test(b: &mut Bencher) {
         let listener = TcpListener::bind("127.0.0.1:9987").unwrap();
         let mut server_stream = listener.incoming().next().unwrap().unwrap();
         let mut server_conn = ConnectionContext::new(ConnectionType::UnauthenticatedServer);
-        while server_conn.crypto_handshake_done().unwrap() == false {
-            if server_conn.crypto_send_handshake(&mut server_stream).is_ok() {
+        while server_conn.handshake_done().unwrap() == false {
+            if server_conn.send_handshake(&mut server_stream).is_ok() {
                 loop {
-                    match server_conn.crypto_recv_handshake(&mut server_stream) {
+                    match server_conn.recv_handshake(&mut server_stream) {
                         Ok(_) => break,
                         Err(OssuaryError::WouldBlock(_)) => {},
                         _ => panic!("Handshake failed"),
@@ -31,8 +31,8 @@ fn bench_test(b: &mut Bencher) {
         let start = std::time::SystemTime::now();
         loop {
             //std::thread::sleep(std::time::Duration::from_millis(100));
-            match server_conn.crypto_recv_data(&mut server_stream,
-                                               &mut plaintext) {
+            match server_conn.recv_data(&mut server_stream,
+                                        &mut plaintext) {
                 Ok((read, _written)) => bytes += read as u64,
                 Err(OssuaryError::WouldBlock(_)) => continue,
                 Err(e) => {
@@ -58,10 +58,10 @@ fn bench_test(b: &mut Bencher) {
     let mut client_stream = TcpStream::connect("127.0.0.1:9987").unwrap();
     client_stream.set_nonblocking(true).unwrap();
     let mut client_conn = ConnectionContext::new(ConnectionType::Client);
-    while client_conn.crypto_handshake_done().unwrap() == false {
-        if client_conn.crypto_send_handshake(&mut client_stream).is_ok() {
+    while client_conn.handshake_done().unwrap() == false {
+        if client_conn.send_handshake(&mut client_stream).is_ok() {
             loop {
-                match client_conn.crypto_recv_handshake(&mut client_stream) {
+                match client_conn.recv_handshake(&mut client_stream) {
                     Ok(_) => break,
                     Err(OssuaryError::WouldBlock(_)) => {},
                     Err(e) => {
@@ -78,8 +78,8 @@ fn bench_test(b: &mut Bencher) {
     let start = std::time::SystemTime::now();
     let mut plaintext: &[u8] = &[0xaa; 16384];
     b.iter(|| {
-        match client_conn.crypto_send_data(&mut plaintext,
-                                           &mut client_stream) {
+        match client_conn.send_data(&mut plaintext,
+                                    &mut client_stream) {
             Ok(b) => bytes += b as u64,
             Err(OssuaryError::WouldBlock(_)) => {},
             _ => panic!("send error"),
@@ -93,7 +93,7 @@ fn bench_test(b: &mut Bencher) {
     }
     let mut plaintext: &[u8] = &[0xde, 0xde, 0xbe, 0xbe];
     loop {
-        match client_conn.crypto_send_data(&mut plaintext, &mut client_stream) {
+        match client_conn.send_data(&mut plaintext, &mut client_stream) {
             Ok(w) => {
                 println!("wrote finish: {}", w);
                 break;
@@ -103,7 +103,7 @@ fn bench_test(b: &mut Bencher) {
         }
     }
 
-    while let Ok(w) = client_conn.crypto_flush(&mut client_stream) {
+    while let Ok(w) = client_conn.flush(&mut client_stream) {
         if w == 0 {
             break;
         }

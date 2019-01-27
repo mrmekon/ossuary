@@ -6,9 +6,7 @@
 //!
 //
 // TODO:
-//  - move all the crypto_* functions into ConnectionContext
-//    - rename to OssuaryConnection
-//    - drop the crypto_ prefixes
+//  - rename to OssuaryConnection
 //  - server certificate
 //  - consider all unexpected packet types to be errors
 //  - ensure that a reset on one end always sends a reset to the other
@@ -572,7 +570,7 @@ impl ConnectionContext {
     ///
     ///
     /// On success, returns the number of bytes written to the output buffer.
-    pub fn crypto_send_handshake<T,U>(&mut self, mut buf: T) -> Result<usize, OssuaryError>
+    pub fn send_handshake<T,U>(&mut self, mut buf: T) -> Result<usize, OssuaryError>
     where T: std::ops::DerefMut<Target = U>,
           U: std::io::Write {
         // Try to send any unsent buffered data
@@ -769,7 +767,7 @@ impl ConnectionContext {
     /// Receive the next handshake packet from the input buffer
     ///
     /// On success, returns the number of bytes consumed from the input buffer.
-    pub fn crypto_recv_handshake<T,U>(&mut self, buf: T) -> Result<usize, OssuaryError>
+    pub fn recv_handshake<T,U>(&mut self, buf: T) -> Result<usize, OssuaryError>
     where T: std::ops::DerefMut<Target = U>,
           U: std::io::Read {
         let mut bytes_read: usize = 0;
@@ -1000,7 +998,7 @@ impl ConnectionContext {
     /// Returns whether the handshake process is complete.
     ///
     ///
-    pub fn crypto_handshake_done(&self) -> Result<bool, &OssuaryError> {
+    pub fn handshake_done(&self) -> Result<bool, &OssuaryError> {
         match self.state {
             ConnectionState::Encrypted => Ok(true),
             ConnectionState::Failed(ref e) => Err(e),
@@ -1008,9 +1006,9 @@ impl ConnectionContext {
         }
     }
 
-    pub fn crypto_send_data<T,U>(&mut self,
-                                 in_buf: &[u8],
-                                 mut out_buf: T) -> Result<usize, OssuaryError>
+    pub fn send_data<T,U>(&mut self,
+                          in_buf: &[u8],
+                          mut out_buf: T) -> Result<usize, OssuaryError>
     where T: std::ops::DerefMut<Target = U>,
           U: std::io::Write {
         // Try to send any unsent buffered data
@@ -1057,9 +1055,9 @@ impl ConnectionContext {
         Ok(written)
     }
 
-    pub fn crypto_recv_data<T,U,R,V>(&mut self,
-                                     in_buf: T,
-                                     mut out_buf: R) -> Result<(usize, usize), OssuaryError>
+    pub fn recv_data<T,U,R,V>(&mut self,
+                              in_buf: T,
+                              mut out_buf: R) -> Result<(usize, usize), OssuaryError>
     where T: std::ops::DerefMut<Target = U>,
           U: std::io::Read,
           R: std::ops::DerefMut<Target = V>,
@@ -1140,8 +1138,8 @@ impl ConnectionContext {
         Ok((bytes_read, bytes_written))
     }
 
-    pub fn crypto_flush<R,V>(&mut self,
-                             mut out_buf: R) -> Result<usize, OssuaryError>
+    pub fn flush<R,V>(&mut self,
+                      mut out_buf: R) -> Result<usize, OssuaryError>
     where R: std::ops::DerefMut<Target = V>,
           V: std::io::Write {
         return write_stored_packet(self, &mut out_buf);

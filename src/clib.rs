@@ -76,7 +76,7 @@ pub extern "C" fn ossuary_recv_handshake(conn: *mut ConnectionContext,
     let inlen = unsafe { *in_buf_len as usize };
     let r_in_buf: &[u8] = unsafe { std::slice::from_raw_parts(in_buf, inlen) };
     let mut slice = r_in_buf;
-    let read: i32 = match conn.crypto_recv_handshake(&mut slice) {
+    let read: i32 = match conn.recv_handshake(&mut slice) {
         Ok(read) => {
             unsafe { *in_buf_len = read as u16; }
             read as i32
@@ -101,7 +101,7 @@ pub extern "C" fn ossuary_send_handshake(conn: *mut ConnectionContext,
     let outlen = unsafe { *out_buf_len as usize };
     let r_out_buf: &mut [u8] = unsafe { std::slice::from_raw_parts_mut(out_buf, outlen) };
     let mut slice = r_out_buf;
-    let wrote: i32 = match conn.crypto_send_handshake(&mut slice) {
+    let wrote: i32 = match conn.send_handshake(&mut slice) {
         Ok(w) => {
             unsafe { *out_buf_len = w as u16 };
             w as i32
@@ -122,7 +122,7 @@ pub extern "C" fn ossuary_handshake_done(conn: *const ConnectionContext) -> i32 
         return -1i32;
     }
     let conn = unsafe { &*conn };
-    let done = conn.crypto_handshake_done();
+    let done = conn.handshake_done();
     ::std::mem::forget(conn);
     match done {
         Ok(done) => done as i32,
@@ -145,7 +145,7 @@ pub extern "C" fn ossuary_send_data(conn: *mut ConnectionContext,
     let r_in_buf: &[u8] = unsafe { std::slice::from_raw_parts(in_buf, in_buf_len as usize) };
     let mut out_slice = r_out_buf;
     let in_slice = r_in_buf;
-    let bytes_written = match conn.crypto_send_data(&in_slice, &mut out_slice) {
+    let bytes_written = match conn.send_data(&in_slice, &mut out_slice) {
         Ok(w) => {
             unsafe { *out_buf_len = w as u16; }
             w as i32
@@ -175,7 +175,7 @@ pub extern "C" fn ossuary_recv_data(conn: *mut ConnectionContext,
     let r_in_buf: &[u8] = unsafe { std::slice::from_raw_parts(in_buf, *in_buf_len as usize) };
     let mut out_slice = r_out_buf;
     let mut in_slice = r_in_buf;
-    let bytes_read = match conn.crypto_recv_data(&mut in_slice, &mut out_slice) {
+    let bytes_read = match conn.recv_data(&mut in_slice, &mut out_slice) {
         Ok((read,written)) => {
             unsafe {
                 *in_buf_len = read as u16;
@@ -206,7 +206,7 @@ pub extern "C" fn ossuary_flush(conn: *mut ConnectionContext,
         std::slice::from_raw_parts_mut(out_buf, out_buf_len as usize)
     };
     let mut out_slice = r_out_buf;
-    let bytes_written = match conn.crypto_flush(&mut out_slice) {
+    let bytes_written = match conn.flush(&mut out_slice) {
         Ok(x) => x as i32,
         Err(OssuaryError::WouldBlock(_)) => ERROR_WOULD_BLOCK,
         Err(_) => -1i32,
