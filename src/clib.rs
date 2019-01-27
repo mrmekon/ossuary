@@ -1,33 +1,33 @@
-use crate::{ConnectionContext, ConnectionType, OssuaryError};
+use crate::{OssuaryContext, ConnectionType, OssuaryError};
 
 const ERROR_WOULD_BLOCK: i32 = -64;
 
 #[no_mangle]
-pub extern "C" fn ossuary_create_connection(conn_type: u8) -> *mut ConnectionContext {
+pub extern "C" fn ossuary_create_connection(conn_type: u8) -> *mut OssuaryContext {
     let conn_type: ConnectionType = match conn_type {
         0 => ConnectionType::Client,
         1 => ConnectionType::AuthenticatedServer,
         2 => ConnectionType::UnauthenticatedServer,
         _ => { return ::std::ptr::null_mut(); }
     };
-    let mut conn = Box::new(ConnectionContext::new(conn_type));
+    let mut conn = Box::new(OssuaryContext::new(conn_type));
     let ptr: *mut _ = &mut *conn;
     ::std::mem::forget(conn);
     ptr
 }
 
 #[no_mangle]
-pub extern "C" fn ossuary_destroy_connection(conn: &mut *mut ConnectionContext) {
+pub extern "C" fn ossuary_destroy_connection(conn: &mut *mut OssuaryContext) {
     if conn.is_null() {
         return;
     }
-    let obj: Box<ConnectionContext> = unsafe { ::std::mem::transmute(*conn) };
+    let obj: Box<OssuaryContext> = unsafe { ::std::mem::transmute(*conn) };
     ::std::mem::drop(obj);
     *conn = ::std::ptr::null_mut();
 }
 
 #[no_mangle]
-pub extern "C" fn ossuary_set_authorized_keys(conn: *mut ConnectionContext,
+pub extern "C" fn ossuary_set_authorized_keys(conn: *mut OssuaryContext,
                                               keys: *const *const u8,
                                               key_count: u8) -> i32 {
     if conn.is_null() || keys.is_null() {
@@ -51,7 +51,7 @@ pub extern "C" fn ossuary_set_authorized_keys(conn: *mut ConnectionContext,
 }
 
 #[no_mangle]
-pub extern "C" fn ossuary_set_secret_key(conn: *mut ConnectionContext,
+pub extern "C" fn ossuary_set_secret_key(conn: *mut OssuaryContext,
                                          key: *const u8) -> i32 {
     if conn.is_null() || key.is_null() {
         return -1 as i32;
@@ -67,7 +67,7 @@ pub extern "C" fn ossuary_set_secret_key(conn: *mut ConnectionContext,
 }
 
 #[no_mangle]
-pub extern "C" fn ossuary_recv_handshake(conn: *mut ConnectionContext,
+pub extern "C" fn ossuary_recv_handshake(conn: *mut OssuaryContext,
                                          in_buf: *const u8, in_buf_len: *mut u16) -> i32 {
     if conn.is_null() || in_buf.is_null() || in_buf_len.is_null() {
         return -1i32;
@@ -92,7 +92,7 @@ pub extern "C" fn ossuary_recv_handshake(conn: *mut ConnectionContext,
 }
 
 #[no_mangle]
-pub extern "C" fn ossuary_send_handshake(conn: *mut ConnectionContext,
+pub extern "C" fn ossuary_send_handshake(conn: *mut OssuaryContext,
                                          out_buf: *mut u8, out_buf_len: *mut u16) -> i32 {
     if conn.is_null() || out_buf.is_null() || out_buf_len.is_null() {
         return -1i32;
@@ -117,7 +117,7 @@ pub extern "C" fn ossuary_send_handshake(conn: *mut ConnectionContext,
 }
 
 #[no_mangle]
-pub extern "C" fn ossuary_handshake_done(conn: *const ConnectionContext) -> i32 {
+pub extern "C" fn ossuary_handshake_done(conn: *const OssuaryContext) -> i32 {
     if conn.is_null() {
         return -1i32;
     }
@@ -131,7 +131,7 @@ pub extern "C" fn ossuary_handshake_done(conn: *const ConnectionContext) -> i32 
 }
 
 #[no_mangle]
-pub extern "C" fn ossuary_send_data(conn: *mut ConnectionContext,
+pub extern "C" fn ossuary_send_data(conn: *mut OssuaryContext,
                                     in_buf: *mut u8, in_buf_len: u16,
                                     out_buf: *mut u8, out_buf_len: *mut u16) -> i32 {
     if conn.is_null() || in_buf.is_null() ||
@@ -161,7 +161,7 @@ pub extern "C" fn ossuary_send_data(conn: *mut ConnectionContext,
 }
 
 #[no_mangle]
-pub extern "C" fn ossuary_recv_data(conn: *mut ConnectionContext,
+pub extern "C" fn ossuary_recv_data(conn: *mut OssuaryContext,
                                     in_buf: *mut u8, in_buf_len: *mut u16,
                                     out_buf: *mut u8, out_buf_len: *mut u16) -> i32 {
     if conn.is_null() || in_buf.is_null() || out_buf.is_null() ||
@@ -196,7 +196,7 @@ pub extern "C" fn ossuary_recv_data(conn: *mut ConnectionContext,
 }
 
 #[no_mangle]
-pub extern "C" fn ossuary_flush(conn: *mut ConnectionContext,
+pub extern "C" fn ossuary_flush(conn: *mut OssuaryContext,
                                 out_buf: *mut u8, out_buf_len: u16) -> i32 {
     if conn.is_null() || out_buf.is_null() {
         return -1i32;

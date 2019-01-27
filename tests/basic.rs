@@ -1,10 +1,10 @@
-use ossuary::{ConnectionContext, ConnectionType};
+use ossuary::{OssuaryContext, ConnectionType};
 use ossuary::OssuaryError;
 
 use std::thread;
 use std::net::{TcpListener, TcpStream};
 
-fn event_loop<T>(mut conn: ConnectionContext,
+fn event_loop<T>(mut conn: OssuaryContext,
                  mut stream: T,
                  is_server: bool) -> Result<(), std::io::Error>
 where T: std::io::Read + std::io::Write {
@@ -49,14 +49,14 @@ where T: std::io::Read + std::io::Write {
 fn server() -> Result<(), std::io::Error> {
     let listener = TcpListener::bind("127.0.0.1:9988").unwrap();
     let stream: TcpStream = listener.incoming().next().unwrap().unwrap();
-    let conn = ConnectionContext::new(ConnectionType::UnauthenticatedServer);
+    let conn = OssuaryContext::new(ConnectionType::UnauthenticatedServer);
     let _ = event_loop(conn, stream, true);
     Ok(())
 }
 
 fn client() -> Result<(), std::io::Error> {
     let stream = TcpStream::connect("127.0.0.1:9988").unwrap();
-    let conn = ConnectionContext::new(ConnectionType::Client);
+    let conn = OssuaryContext::new(ConnectionType::Client);
     let _ = event_loop(conn, stream, false);
     Ok(())
 }

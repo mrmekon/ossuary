@@ -4,7 +4,7 @@ use test::Bencher;
 use std::thread;
 use std::net::{TcpListener, TcpStream};
 
-use ossuary::{ConnectionContext, ConnectionType};
+use ossuary::{OssuaryContext, ConnectionType};
 use ossuary::OssuaryError;
 //use crate::*;
 
@@ -13,7 +13,7 @@ fn bench_test(b: &mut Bencher) {
     let server_thread = thread::spawn(move || {
         let listener = TcpListener::bind("127.0.0.1:9987").unwrap();
         let mut server_stream = listener.incoming().next().unwrap().unwrap();
-        let mut server_conn = ConnectionContext::new(ConnectionType::UnauthenticatedServer);
+        let mut server_conn = OssuaryContext::new(ConnectionType::UnauthenticatedServer);
         while server_conn.handshake_done().unwrap() == false {
             if server_conn.send_handshake(&mut server_stream).is_ok() {
                 loop {
@@ -57,7 +57,7 @@ fn bench_test(b: &mut Bencher) {
     std::thread::sleep(std::time::Duration::from_millis(500));
     let mut client_stream = TcpStream::connect("127.0.0.1:9987").unwrap();
     client_stream.set_nonblocking(true).unwrap();
-    let mut client_conn = ConnectionContext::new(ConnectionType::Client);
+    let mut client_conn = OssuaryContext::new(ConnectionType::Client);
     while client_conn.handshake_done().unwrap() == false {
         if client_conn.send_handshake(&mut client_stream).is_ok() {
             loop {
