@@ -4,6 +4,35 @@
 //! Ossuary is a library for establishing an encrypted and authenticated
 //! communication channel between a client and a server.
 //!
+//! The protocol (authenticated):
+//!
+//! <client> --> [session public key, session nonce] --> <server>
+//! <client> <-- [session public key, session nonce] <-- <server>
+//! <client> --> [ack] --> <server>
+//! <client> <-- [[random challenge]] <-- <server>
+//! <client> --> [[signed challenge]] --> <server>
+//!
+//! The protocol (unauthenticated):
+//!
+//! <client> --> [session public key, session nonce] --> <server>
+//! <client> <-- [session public key, session nonce] <-- <server>
+//! <client> --> [ack] --> <server>
+//! <client> <-- [ack] <-- <server>
+//!
+//!
+//!
+//! TODO:
+//! <client> --> [session x25519 public key,
+//!               session nonce,
+//!               client random challenge]      --> <server>
+//! <client> <-- [session x25519 public key,
+//!               session nonce],
+//!              [[server x25519 public key,
+//!                server random challenge,
+//!                client challenge signature]] <-- <server>
+//! <client> --> [[server challenge signature]] --> <server>
+//!
+
 //
 // TODO:
 //  - rename to OssuaryConnection
@@ -12,25 +41,27 @@
 //  - ensure that a reset on one end always sends a reset to the other
 //  - limit connection retries
 //  - protocol version number
+//  - tests should check their received strings
+//  - rustdoc everything
+//  - don't use HandshakePacket for multiple purposes
 //
+
+pub mod clib;
 
 extern crate x25519_dalek;
 extern crate ed25519_dalek;
 extern crate rand;
 extern crate chacha20_poly1305_aead;
 
+use std::convert::TryInto;
+
 use chacha20_poly1305_aead::{encrypt,decrypt};
 use x25519_dalek::{EphemeralSecret, EphemeralPublic, SharedSecret};
-
 use ed25519_dalek::{Signature, Keypair, SecretKey, PublicKey};
 
 //use rand::thread_rng;
 use rand::RngCore;
 use rand::rngs::OsRng;
-
-use std::convert::TryInto;
-
-pub mod clib;
 
 // Maximum time to wait (in seconds) for a handshake response
 const MAX_HANDSHAKE_WAIT_TIME: u64 = 3u64;
@@ -172,7 +203,6 @@ impl std::fmt::Debug for OssuaryError {
             OssuaryError::ConnectionReset => write!(f, "OssuaryError::ConnectionReset"),
             OssuaryError::ConnectionFailed => write!(f, "OssuaryError::ConnectionFailed"),
         }
-        //write!(f, "OssuaryError")
     }
 }
 impl From<std::io::Error> for OssuaryError {
@@ -393,6 +423,8 @@ pub struct OssuaryContext {
     challenge: Option<Vec<u8>>,
     challenge_sig: Option<Vec<u8>>,
     authorized_keys: Vec<[u8; 32]>,
+    // TODO: secret key should be stored in a single spot on the heap and
+    // cleared after use.  Perhaps use clear_on_drop crate.
     secret_key: Option<SecretKey>, // authentication key
     public_key: Option<PublicKey>, // authentication key
     read_buf: [u8; PACKET_BUF_SIZE],
