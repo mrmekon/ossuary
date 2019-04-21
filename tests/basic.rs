@@ -49,6 +49,7 @@ where T: std::io::Read + std::io::Write {
 fn server() -> Result<(), std::io::Error> {
     let listener = TcpListener::bind("127.0.0.1:9988").unwrap();
     let stream: TcpStream = listener.incoming().next().unwrap().unwrap();
+    stream.set_read_timeout(Some(std::time::Duration::from_millis(100u64)));
     let conn = OssuaryContext::new(ConnectionType::UnauthenticatedServer);
     let _ = event_loop(conn, stream, true);
     Ok(())
@@ -56,6 +57,7 @@ fn server() -> Result<(), std::io::Error> {
 
 fn client() -> Result<(), std::io::Error> {
     let stream = TcpStream::connect("127.0.0.1:9988").unwrap();
+    stream.set_read_timeout(Some(std::time::Duration::from_millis(100u64)));
     let conn = OssuaryContext::new(ConnectionType::Client);
     let _ = event_loop(conn, stream, false);
     Ok(())
