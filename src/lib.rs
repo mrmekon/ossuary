@@ -1,4 +1,3 @@
-#![feature(try_from)]
 //! # Ossuary
 //!
 //! Ossuary is a library for establishing an encrypted and authenticated
@@ -35,7 +34,8 @@
 //!
 
 //
-// TODO:
+// TODO
+//  - Increment nonce on each encryption/decryption:
 //  - rename to OssuaryConnection
 //  - server certificate
 //  - consider all unexpected packet types to be errors
@@ -307,7 +307,8 @@ struct ServerHandshakePacket {
     _reserved: [u8; 5],
     public_key: [u8; KEY_LEN],
     nonce: [u8; NONCE_LEN],
-    subpacket: [u8; ::std::mem::size_of::<ServerEncryptedHandshakePacket>() + TAG_LEN],
+    subpacket: [u8; ::std::mem::size_of::<ServerEncryptedHandshakePacket>() +
+                ::std::mem::size_of::<EncryptedPacket>() + TAG_LEN],
 }
 #[repr(C,packed)]
 struct ServerEncryptedHandshakePacket {
@@ -322,6 +323,12 @@ impl Default for ServerEncryptedHandshakePacket {
             challenge: [0u8; CHALLENGE_LEN],
             signature: [0u8; SIGNATURE_LEN],
         }
+    }
+}
+impl ServerEncryptedHandshakePacket {
+    fn from_bytes(data: &[u8]) -> Result<&ServerEncryptedHandshakePacket, OssuaryError> {
+        let s: &ServerEncryptedHandshakePacket = slice_as_struct(&data)?;
+        Ok(s)
     }
 }
 fn encrypt_to_bytes<T,U>(session_key: &[u8], nonce: &[u8],
@@ -351,6 +358,26 @@ where T: std::ops::DerefMut<Target = U>,
     Ok(size)
 }
 
+fn decrypt_to_bytes<T,U>(session_key: &[u8], nonce: &[u8],
+                         data: &[u8], mut out: T) -> Result<usize, OssuaryError>
+where T: std::ops::DerefMut<Target = U>,
+      U: std::io::Write {
+    let s: &EncryptedPacket = slice_as_struct(data)?;
+    if s.tag_len != 16 {
+        return Err(OssuaryError::InvalidPacket("Invalid packet length".into()));
+    }
+    let data_pkt = s;
+    let rest = &data[::std::mem::size_of::<EncryptedPacket>()..];
+    let ciphertext = &rest[..data_pkt.data_len as usize];
+    let tag = &rest[data_pkt.data_len as usize..];
+    let aad = [];
+    decrypt(session_key,
+            &nonce,
+            &aad, &ciphertext, &tag,
+            out.deref_mut())?;
+    Ok(ciphertext.len())
+}
+
 impl Default for ServerHandshakePacket {
     fn default() -> ServerHandshakePacket {
         ServerHandshakePacket {
@@ -359,7 +386,8 @@ impl Default for ServerHandshakePacket {
             _reserved: [0u8; 5],
             public_key: [0u8; KEY_LEN],
             nonce: [0u8; NONCE_LEN],
-            subpacket: [0; ::std::mem::size_of::<ServerEncryptedHandshakePacket>() + TAG_LEN],
+            subpacket: [0; ::std::mem::size_of::<ServerEncryptedHandshakePacket>() +
+                        ::std::mem::size_of::<EncryptedPacket>() + TAG_LEN],
         }
     }
 }
@@ -376,6 +404,11 @@ impl ServerHandshakePacket {
         let mut subpkt: &mut [u8] = &mut pkt.subpacket;
         encrypt_to_bytes(session_privkey, nonce, struct_as_slice(&enc_pkt), &mut subpkt);
         pkt
+    }
+    fn from_packet(pkt: &NetworkPacket) -> Result<&ServerHandshakePacket, OssuaryError> {
+        let hs_pkt = interpret_packet::<ServerHandshakePacket>(&pkt);
+        // TODO: validate len/version fields
+        hs_pkt
     }
 }
 
@@ -499,15 +532,23 @@ enum ConnectionState {
     Encrypted,
 }
 
-struct KeyMaterial {
+#[derive(Default)]
+struct AuthKeyMaterial {
+    secret_key: Option<SecretKey>,
+    public_key: Option<PublicKey>,
+    challenge: Option<[u8; CHALLENGE_LEN]>,
+    signature: Option<[u8; SIGNATURE_LEN]>,
+}
+
+struct SessionKeyMaterial {
     secret: Option<EphemeralSecret>,
     public: [u8; 32],
     session: Option<SharedSecret>,
     nonce: [u8; 12],
 }
-impl Default for KeyMaterial {
+impl Default for SessionKeyMaterial {
     fn default() -> Self {
-        KeyMaterial {
+        SessionKeyMaterial {
             secret: None,
             session: None,
             public: [0u8; KEY_LEN],
@@ -564,8 +605,8 @@ pub enum ConnectionType {
 pub struct OssuaryContext {
     state: ConnectionState,
     conn_type: ConnectionType,
-    local_key: KeyMaterial, // session key
-    remote_key: Option<KeyMaterial>, // session key
+    local_key: SessionKeyMaterial, // session key
+    remote_key: Option<SessionKeyMaterial>, // session key
     local_msg_id: u16,
     remote_msg_id: u16,
     local_challenge: [u8; CHALLENGE_LEN],
@@ -577,6 +618,8 @@ pub struct OssuaryContext {
     // cleared after use.  Perhaps use clear_on_drop crate.
     secret_key: Option<SecretKey>, // authentication key
     public_key: Option<PublicKey>, // authentication key
+    local_auth: AuthKeyMaterial,
+    remote_auth: AuthKeyMaterial,
     read_buf: [u8; PACKET_BUF_SIZE],
     read_buf_used: usize,
     write_buf: [u8; PACKET_BUF_SIZE],
@@ -598,6 +641,8 @@ impl Default for OssuaryContext {
             authorized_keys: vec!(),
             secret_key: None,
             public_key: None,
+            local_auth: Default::default(),
+            remote_auth: Default::default(),
             read_buf: [0u8; PACKET_BUF_SIZE],
             read_buf_used: 0,
             write_buf: [0u8; PACKET_BUF_SIZE],
@@ -621,7 +666,7 @@ impl OssuaryContext {
         rng.fill_bytes(&mut challenge);
         rng.fill_bytes(&mut nonce);
 
-        let key = KeyMaterial {
+        let key = SessionKeyMaterial {
             secret: Some(sec_key),
             public: *pub_key.as_bytes(),
             nonce: nonce,
@@ -676,7 +721,7 @@ impl OssuaryContext {
     }
     /// Add key received from a remote connection and generate session key
     fn add_remote_key(&mut self, public: &[u8; 32], nonce: &[u8; 12]) {
-        let key = KeyMaterial {
+        let key = SessionKeyMaterial {
             secret: None,
             public: public.to_owned(),
             nonce: nonce.to_owned(),
@@ -806,13 +851,17 @@ impl OssuaryContext {
             //                server random challenge,
             //                client challenge signature]] <-- <server>
             ConnectionState::ServerSendHandshake => {
+                // Get a local copy of server's secret auth key, if it has one.
+                // Default to 0s.
                 let server_secret = match self.secret_key {
                     Some(ref s) => match SecretKey::from_bytes(s.as_bytes()) {
-                        Ok(s) => Some(s), // local copy of secret key
+                        Ok(s) => Some(s),
                         Err(_) => None,
                     },
                     _ => None,
                 };
+                // Sign the client's challenge if we have a key,
+                // default to 0s.
                 let sig: [u8; SIGNATURE_LEN] = match server_secret {
                     Some(s) => {
                         let server_public = PublicKey::from(&s);
@@ -827,10 +876,13 @@ impl OssuaryContext {
                     },
                     None => [0; SIGNATURE_LEN],
                 };
+                // Get server's public auth key, if it has one.
+                // Default to 0s.
                 let server_public = match self.public_key {
                     Some(ref p) => p.as_bytes(),
                     None => &[0; KEY_LEN],
                 };
+                // Get session encryption key, which must be known by now.
                 let session = match self.local_key.session {
                     Some(ref s) => s.as_bytes(),
                     None => {
@@ -950,7 +1002,43 @@ impl OssuaryContext {
             //                server random challenge,
             //                client challenge signature]] <-- <server>
             ConnectionState::ClientWaitHandshake(t) => {
-                println!("Client got handshake?");
+                match pkt.kind() {
+                    PacketType::ServerHandshake => {
+                        if let Ok(inner_pkt) = ServerHandshakePacket::from_packet(&pkt) {
+                            println!("Client got handshake!");
+                            self.add_remote_key(&inner_pkt.public_key, &inner_pkt.nonce);
+                            let mut plaintext: [u8; 400] = [0u8; 400];
+                            let session = match self.local_key.session {
+                                Some(ref s) => s.as_bytes(),
+                                _ => {
+                                    self.reset_state(None);
+                                    return Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()));
+                                }
+                            };
+                            let nonce = match self.remote_key {
+                                Some(ref k) => k.nonce,
+                                _ => {
+                                    self.reset_state(None);
+                                    return Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()));
+                                }
+                            };
+                            let mut pt: &mut [u8] = &mut plaintext;
+                            let w = decrypt_to_bytes(session, &nonce, &inner_pkt.subpacket, &mut pt)?;
+                            if let Ok(enc_pkt) = ServerEncryptedHandshakePacket::from_bytes(&pt) {
+                                let mut chal: [u8; CHALLENGE_LEN] = Default::default();
+                                chal.copy_from_slice(&enc_pkt.challenge);
+                                self.remote_challenge = Some(chal);
+                                // TODO NEXT
+                                // public key
+                                // signature
+                            }
+                        }
+                    },
+                    _ => {
+                        self.reset_state(None);
+                        return Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()));
+                    },
+                }
             },
 
             // <client> --> [[client x25519 public key,
