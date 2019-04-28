@@ -241,15 +241,13 @@ impl OssuaryConnection {
                 // default to 0s.
                 let sig: [u8; SIGNATURE_LEN] = match server_secret {
                     Some(s) => {
+                        let mut sign_data = [0u8; KEY_LEN + NONCE_LEN + CHALLENGE_LEN];
+                        sign_data[0..KEY_LEN].copy_from_slice(&self.local_key.public);
+                        sign_data[KEY_LEN..KEY_LEN+NONCE_LEN].copy_from_slice(&self.local_key.nonce);
+                        sign_data[KEY_LEN+NONCE_LEN..].copy_from_slice(&self.remote_auth.challenge.unwrap_or([0u8; CHALLENGE_LEN]));
                         let server_public = PublicKey::from(&s);
                         let keypair = Keypair { secret: s, public: server_public };
-                        match self.remote_auth.challenge {
-                            Some(ref c) => keypair.sign(c).to_bytes(),
-                            None => {
-                                self.reset_state(None);
-                                return Err(OssuaryError::InvalidSignature);
-                            }
-                        }
+                        keypair.sign(&sign_data).to_bytes()
                     },
                     None => [0; SIGNATURE_LEN],
                 };
@@ -298,13 +296,11 @@ impl OssuaryConnection {
                     Some(s) => {
                         let client_public = PublicKey::from(&s);
                         let keypair = Keypair { secret: s, public: client_public };
-                        match self.remote_auth.challenge {
-                            Some(ref c) => keypair.sign(c).to_bytes(),
-                            None => {
-                                self.reset_state(None);
-                                return Err(OssuaryError::InvalidSignature);
-                            }
-                        }
+                        let mut sign_data = [0u8; KEY_LEN + NONCE_LEN + CHALLENGE_LEN];
+                        sign_data[0..KEY_LEN].copy_from_slice(&self.local_key.public);
+                        sign_data[KEY_LEN..KEY_LEN+NONCE_LEN].copy_from_slice(&self.local_key.nonce);
+                        sign_data[KEY_LEN+NONCE_LEN..].copy_from_slice(&self.remote_auth.challenge.unwrap_or([0u8; CHALLENGE_LEN]));
+                        keypair.sign(&sign_data).to_bytes()
                     },
                     None => [0; SIGNATURE_LEN],
                 };
@@ -483,7 +479,12 @@ impl OssuaryConnection {
                                             self.reset_state(None);
                                             return Err(OssuaryError::InvalidSignature);
                                         }
-                                    match pubkey.verify(&chal, &signature) {
+                                    // This is the first encrypted message, so the nonce has not changed yet
+                                    let mut sign_data = [0u8; KEY_LEN + NONCE_LEN + CHALLENGE_LEN];
+                                    sign_data[0..KEY_LEN].copy_from_slice(self.remote_key.as_ref().map(|k| &k.public).unwrap_or(&[0u8; KEY_LEN]));
+                                    sign_data[KEY_LEN..KEY_LEN+NONCE_LEN].copy_from_slice(self.remote_key.as_ref().map(|k| &k.nonce).unwrap_or(&[0u8; NONCE_LEN]));
+                                    sign_data[KEY_LEN+NONCE_LEN..].copy_from_slice(&self.local_auth.challenge.unwrap_or([0u8; CHALLENGE_LEN]));
+                                    match pubkey.verify(&sign_data, &signature) {
                                         Ok(_) => {},
                                         Err(_) => {
                                             self.reset_state(None);
@@ -561,7 +562,12 @@ impl OssuaryConnection {
                                                 self.reset_state(None);
                                                 return Err(OssuaryError::InvalidSignature);
                                         }
-                                        match pubkey.verify(&challenge, &signature) {
+                                        // This is the first encrypted message, so the nonce has not changed yet
+                                        let mut sign_data = [0u8; KEY_LEN + NONCE_LEN + CHALLENGE_LEN];
+                                        sign_data[0..KEY_LEN].copy_from_slice(self.remote_key.as_ref().map(|k| &k.public).unwrap_or(&[0u8; KEY_LEN]));
+                                        sign_data[KEY_LEN..KEY_LEN+NONCE_LEN].copy_from_slice(self.remote_key.as_ref().map(|k| &k.nonce).unwrap_or(&[0u8; NONCE_LEN]));
+                                        sign_data[KEY_LEN+NONCE_LEN..].copy_from_slice(&self.local_auth.challenge.unwrap_or([0u8; CHALLENGE_LEN]));
+                                        match pubkey.verify(&sign_data, &signature) {
                                             Ok(_) => {},
                                             Err(_) => {
                                                 self.reset_state(None);

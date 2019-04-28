@@ -30,14 +30,14 @@
 //! ```text
 //! <client> --> [  session x25519 public key,
 //!                 session nonce,
-//!                 client random challenge    ]  --> <server>
+//!                 client random challenge                ] --> <server>
 //! <client> <-- [  session x25519 public key,
 //!                 session nonce],
-//!              [[ auth x25519 public key,
+//!              [[ auth ed25519 public key,
 //!                 server random challenge,
-//!                 client challenge signature ]] <-- <server>
-//! <client> --> [[ auth x25519 public key,
-//!                 server challenge signature ]] --> <server>
+//!                 signature(pubkey, nonce, challenge),  ]] <-- <server>
+//! <client> --> [[ auth ed25519 public key,
+//!                 signature(pubkey, nonce, challenge),  ]] --> <server>
 //! ```
 //!
 //! Host authentication (verifying the identity of the remote server or client)
@@ -52,8 +52,10 @@
 //!   its identity in authenticated connections.
 //! * **auth public key**: Public part of long-lived public/private key pair
 //!   used for host authentication.
-//! * **signature**: Signature of remote party's random challenge with auth
-//!   private key, to prove identity.
+//! * **signature**: Signature, with long-lived private authentication key, of
+//!   local party's session public key and nonce (the ECDH parameters) and
+//!   remote party's random challenge, to prove host identity and prevent
+//!   man-in-the-middle attacks.
 //!
 //! ## Security Protections
 //!
@@ -80,10 +82,10 @@
 //!
 //! ### Man-in-the-Middle
 //!
-//! Host authentication with Ed25519 signature verification prevents man-in-the-
-//! middle attacks.  Host authentication is optional, and requires out-of-band
-//! exchange of host public keys or a Trust On First Use policy, so MITM attacks
-//! may be possible if care is not taken.
+//! Host authentication with Ed25519 signature verification of ECDH parameters
+//! prevents man-in-the-middle attacks.  Host authentication is optional, and
+//! requires out-of-band exchange of host public keys or a Trust On First Use
+//! policy, so MITM attacks may be possible if care is not taken.
 //!
 //! ## Security Limitations
 //!
@@ -95,7 +97,7 @@
 //! ### Keys In RAM
 //!
 //! No efforts are taken to secure key data in RAM.  Attacks from privileged
-//! local prcesses are possible.
+//! local processes are possible.
 //!
 //! ### Keys On Disk
 //!
