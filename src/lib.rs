@@ -124,7 +124,6 @@
 
 //
 // TODO
-//  - Increment nonce on each encryption/decryption:
 //  - server certificate (TOFU)
 //  - consider all unexpected packet types to be errors
 //  - ensure that a reset on one end always sends a reset to the other
@@ -410,6 +409,15 @@ fn interpret_packet<'a, T>(pkt: &'a NetworkPacket) -> Result<&'a T, OssuaryError
     Ok(s)
 }
 
+fn increment_nonce(nonce: &mut [u8]) -> bool {
+    let wrapped = nonce.iter_mut().rev().fold(1, |acc, x| {
+        let (val,carry) = x.overflowing_add(acc);
+        *x = val;
+        carry as u8
+    });
+    wrapped != 0
+}
+
 /// Cast the data bytes in a NetworkPacket into a struct, and also return the
 /// remaining unused bytes if the data is larger than the struct.
 fn interpret_packet_extra<'a, T>(pkt: &'a NetworkPacket)
@@ -470,5 +478,4 @@ mod tests {
         ];
         let _ = conn.set_authorized_keys(keys.iter().map(|x| x.as_slice())).unwrap();
     }
-
 }

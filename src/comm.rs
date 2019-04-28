@@ -158,6 +158,7 @@ impl OssuaryConnection {
         buf.extend(&tag);
         let written = write_packet(self, &mut out_buf, &buf,
                                    PacketType::EncryptedData)?;
+        increment_nonce(&mut self.local_key.nonce);
         Ok(written)
     }
 
@@ -220,6 +221,7 @@ impl OssuaryConnection {
                                     Ok(w) => w,
                                     Err(e) => return Err(e.into()),
                                 };
+                                let _ = self.remote_key.as_mut().map(|k| increment_nonce(&mut k.nonce));
                             },
                             Err(_) => {
                                 self.reset_state(None);

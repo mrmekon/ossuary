@@ -274,6 +274,7 @@ impl OssuaryConnection {
                                                      &sig)?;
                 let w = write_packet(self, &mut buf, struct_as_slice(&pkt),
                                      PacketType::ServerHandshake)?;
+                increment_nonce(&mut self.local_key.nonce);
                 self.state = ConnectionState::ServerWaitAuthentication(std::time::SystemTime::now());
                 w
             },
@@ -324,6 +325,7 @@ impl OssuaryConnection {
                                                           &sig)?;
                 let w = write_packet(self, &mut buf, struct_as_slice(&pkt),
                                      PacketType::ClientAuthentication)?;
+                increment_nonce(&mut self.local_key.nonce);
                 self.state = ConnectionState::Encrypted;
                 w
             },
@@ -498,6 +500,7 @@ impl OssuaryConnection {
                                     signature: Some(sig),
                                     secret_key: None,
                                 };
+                                let _ = self.remote_key.as_mut().map(|k| increment_nonce(&mut k.nonce));
                                 self.state = ConnectionState::ClientSendAuthentication;
                             }
                         }
@@ -579,6 +582,7 @@ impl OssuaryConnection {
                                 }
                                 self.remote_auth.signature = Some(sig);
                                 self.remote_auth.public_key = Some(pubkey);
+                                let _ = self.remote_key.as_mut().map(|k| increment_nonce(&mut k.nonce));
                                 self.state = ConnectionState::Encrypted;
                             }
                         }
