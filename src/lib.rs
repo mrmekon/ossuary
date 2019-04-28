@@ -3,48 +3,133 @@
 //! Ossuary is a library for establishing an encrypted and authenticated
 //! communication channel between a client and a server.
 //!
-//! The protocol (authenticated):
+//! It establishes a 1-to-1 client/server communication channel that requires
+//! reliable, in-order packet delivery, such as provided by TCP sockets.
 //!
-//! <client> --> [session public key, session nonce] --> <server>
-//! <client> <-- [session public key, session nonce] <-- <server>
-//! <client> --> [ack] --> <server>
-//! <client> <-- [[random challenge]] <-- <server>
-//! <client> --> [[signed challenge]] --> <server>
+//! Authentication and verification of remote hosts is optional, and requires
+//! an out-of-band exchange of host public keys, or a Trust-On-First-Use policy.
 //!
-//! The protocol (unauthenticated):
+//! ## Ciphers:
 //!
-//! <client> --> [session public key, session nonce] --> <server>
-//! <client> <-- [session public key, session nonce] <-- <server>
-//! <client> --> [ack] --> <server>
-//! <client> <-- [ack] <-- <server>
+//! * Ephemeral session keys: Curve25519 ECDH.
+//! * Session encryption: ChaCha20 symmetrical cipher.
+//! * Message authentication: Poly1305 MAC.
+//! * Host authentication: Ed25519 signature scheme.
 //!
+//! ## The handshake protocol:
 //!
+//! A 3-packet (1.5 roundtrip) handshake is always performed.
 //!
-//! TODO:
-//! <client> --> [session x25519 public key,
-//!               session nonce,
-//!               client random challenge]      --> <server>
-//! <client> <-- [session x25519 public key,
-//!               session nonce],
-//!              [[server x25519 public key,
-//!                server random challenge,
-//!                client challenge signature]] <-- <server>
-//! <client> --> [[client x25519 public key,
-//!                server challenge signature]] --> <server>
+//! The necessary fields to perform an ECDH key exchange and establish a
+//! shared session key are sent in the clear, while fields for host verification
+//! are encrypted with the established session key.
+//!
+//! In the following diagram, fields in [single brackets] are sent in the clear,
+//! and those in [[double brackets]] are encrypted:
+//!
+//! ```text
+//! <client> --> [  session x25519 public key,
+//!                 session nonce,
+//!                 client random challenge    ]  --> <server>
+//! <client> <-- [  session x25519 public key,
+//!                 session nonce],
+//!              [[ auth x25519 public key,
+//!                 server random challenge,
+//!                 client challenge signature ]] <-- <server>
+//! <client> --> [[ auth x25519 public key,
+//!                 server challenge signature ]] --> <server>
+//! ```
+//!
+//! Host authentication (verifying the identity of the remote server or client)
+//! is optional.   In non-authenticated flows, "auth public key", "challenge",
+//! and "signature" fields are set to all 0s, but are still transmitted.
+//!
+//! ### Fields
+//!
+//! * **session public key**: Public part of randomly generated public/private
+//!   key pair for this session, used to generate an ephemeral session key.
+//! * **challenge**: Randomly generated string for remote party to sign to prove
+//!   its identity in authenticated connections.
+//! * **auth public key**: Public part of long-lived public/private key pair
+//!   used for host authentication.
+//! * **signature**: Signature of remote party's random challenge with auth
+//!   private key, to prove identity.
+//!
+//! ## Security Protections
+//!
+//! ### Passive Snooping
+//!
+//! Per-packet encryption with ChaCha20 prevents passive monitoring of the
+//! contents of the communication channel.
+//!
+//! ### Malleability
+//!
+//! Poly1305 MAC prevents active manipulation of packets in-flight, ensuring
+//! that any manipulation will cause the channel to terminate.
+//!
+//! ### Replay Attacks
+//!
+//! Poly1305 MAC combined with a nonce scheme prevents replay attacks, and
+//! prevents manipulation of message order.
+//!
+//! ### Forward Secrecy
+//!
+//! Per-session encryption with ephemeral x25519 keys ensures that the
+//! compromise of one session does not necessarily result in the compromise of
+//! any previous or future session.
+//!
+//! ### Man-in-the-Middle
+//!
+//! Host authentication with Ed25519 signature verification prevents man-in-the-
+//! middle attacks.  Host authentication is optional, and requires out-of-band
+//! exchange of host public keys or a Trust On First Use policy, so MITM attacks
+//! may be possible if care is not taken.
+//!
+//! ## Security Limitations
+//!
+//! ### Code Quality
+//!
+//! This software is not code reviewed, and no security analysis has been
+//! performed.
+//!
+//! ### Keys In RAM
+//!
+//! No efforts are taken to secure key data in RAM.  Attacks from privileged
+//! local prcesses are possible.
+//!
+//! ### Keys On Disk
+//!
+//! No mechanisms are provided for storing keys on disk.  Secure key storage
+//! is left as a task for the caller.
+//!
+//! ### Side-Channel
+//!
+//! No efforts are taken to protect against side channel attacks such as timing
+//! or cache analysis.
+//!
+//! ### Software Dependencies
+//!
+//! This software depends on third-party software libraries for all core
+//! cryptographic algorithms, which have not been code reviewed and are subject
+//! to change.
+//!
+//! ### Trust-On-First-Use (TOFU)
+//!
+//! Host authentication supports a trust-on-first-use policy, which opens the
+//! possibility of man-in-the-middle attacks if the first connection is
+//! compromised.
 //!
 
 //
 // TODO
 //  - Increment nonce on each encryption/decryption:
 //  - rename to OssuaryConnection
-//  - server certificate
+//  - server certificate (TOFU)
 //  - consider all unexpected packet types to be errors
 //  - ensure that a reset on one end always sends a reset to the other
 //  - limit connection retries
-//  - protocol version number
 //  - tests should check their received strings
 //  - rustdoc everything
-//  - don't use HandshakePacket for multiple purposes
 //
 // TODO: raise OssuaryError::UntrustedServer() when trust-on-first-use
 
