@@ -28,8 +28,8 @@ uint8_t *authorized_keys[] = {
 int main(int argc, char **argv) {
   int client_done, server_done;
   uint16_t client_bytes, server_bytes, bytes, out_len;
-  ConnectionContext *client_conn = NULL;
-  ConnectionContext *server_conn = NULL;
+  OssuaryConnection *client_conn = NULL;
+  OssuaryConnection *server_conn = NULL;
 
   client_conn = ossuary_create_connection(CONN_TYPE_CLIENT);
   ossuary_set_secret_key(client_conn, secret_key);

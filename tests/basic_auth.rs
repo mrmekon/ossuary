@@ -1,10 +1,10 @@
-use ossuary::{OssuaryContext, ConnectionType};
+use ossuary::{OssuaryConnection, ConnectionType};
 use ossuary::OssuaryError;
 
 use std::thread;
 use std::net::{TcpListener, TcpStream};
 
-fn event_loop<T>(mut conn: OssuaryContext,
+fn event_loop<T>(mut conn: OssuaryConnection,
                  mut stream: T,
                  is_server: bool) -> Result<(), std::io::Error>
 where T: std::io::Read + std::io::Write {
@@ -48,7 +48,7 @@ where T: std::io::Read + std::io::Write {
 fn server() -> Result<(), std::io::Error> {
     let listener = TcpListener::bind("127.0.0.1:9988").unwrap();
     let stream: TcpStream = listener.incoming().next().unwrap().unwrap();
-    let mut conn = OssuaryContext::new(ConnectionType::AuthenticatedServer);
+    let mut conn = OssuaryConnection::new(ConnectionType::AuthenticatedServer);
     let keys: Vec<&[u8]> = vec![
         &[0xbe, 0x1c, 0xa0, 0x74, 0xf4, 0xa5, 0x8b, 0xbb,
           0xd2, 0x62, 0xa7, 0xf9, 0x52, 0x3b, 0x6f, 0xb0,
@@ -62,7 +62,7 @@ fn server() -> Result<(), std::io::Error> {
 
 fn client() -> Result<(), std::io::Error> {
     let stream = TcpStream::connect("127.0.0.1:9988").unwrap();
-    let mut conn = OssuaryContext::new(ConnectionType::Client);
+    let mut conn = OssuaryConnection::new(ConnectionType::Client);
     let _ = conn.set_secret_key(
         &[0x10, 0x86, 0x6e, 0xc4, 0x8a, 0x11, 0xf3, 0xc5,
           0x6d, 0x77, 0xa6, 0x4b, 0x2f, 0x54, 0xaa, 0x06,

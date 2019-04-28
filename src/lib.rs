@@ -123,7 +123,6 @@
 //
 // TODO
 //  - Increment nonce on each encryption/decryption:
-//  - rename to OssuaryConnection
 //  - server certificate (TOFU)
 //  - consider all unexpected packet types to be errors
 //  - ensure that a reset on one end always sends a reset to the other
@@ -226,8 +225,8 @@ pub enum OssuaryError {
     /// An invalid sized encryption key was encountered.
     ///
     /// This error is most likely caused by an attempt to register an invalid
-    /// secret or public key in [`OssuaryContext::set_authorized_keys`] or
-    /// [`OssuaryContext::set_secret_key`].  Both should be 32 bytes.
+    /// secret or public key in [`OssuaryConnection::set_authorized_keys`] or
+    /// [`OssuaryConnection::set_secret_key`].  Both should be 32 bytes.
     KeySize(usize, usize), // (expected, actual)
 
     /// An error occurred when parsing or using an encryption key.
@@ -640,7 +639,7 @@ impl NetworkPacket {
     }
 }
 
-/// Internal state of OssuaryContext state machine.
+/// Internal state of OssuaryConnection state machine.
 #[derive(Debug)]
 enum ConnectionState {
     /// Server is waiting for handshake packet from a client
@@ -711,7 +710,7 @@ impl Default for SessionKeyMaterial {
     }
 }
 
-/// Enum specifying the client or server role of a [`OssuaryContext`]
+/// Enum specifying the client or server role of a [`OssuaryConnection`]
 #[derive(Clone)]
 pub enum ConnectionType {
     /// This context is a client
@@ -720,9 +719,9 @@ pub enum ConnectionType {
     /// This context is a server that requires authentication.
     ///
     /// Authenticated servers only allow connections from clients with secret
-    /// keys set using [`OssuaryContext::set_secret_key`], and with the
+    /// keys set using [`OssuaryConnection::set_secret_key`], and with the
     /// matching public key registered with the server using
-    /// [`OssuaryContext::set_authorized_keys`].
+    /// [`OssuaryConnection::set_authorized_keys`].
     AuthenticatedServer,
 
     /// This context is a server that does not support authentication.
@@ -737,26 +736,26 @@ pub enum ConnectionType {
 /// Context for interacting with an encrypted communication channel
 ///
 /// All interaction with ossuary's encrypted channels is performed via a
-/// OssuaryContext instance.  It holds all of the state required to maintain
+/// OssuaryConnection instance.  It holds all of the state required to maintain
 /// one side of an encrypted connection.
 ///
-/// A context is created with [`OssuaryContext::new`], passing it a
+/// A context is created with [`OssuaryConnection::new`], passing it a
 /// [`ConnectionType`] identifying whether it is to act as a client or server.
 /// Server contexts can optionally require authentication, verified by providing
 /// a list of public keys of permitted clients with
-/// [`OssuaryContext::set_authorized_keys`].  Clients, on the other hand,
+/// [`OssuaryConnection::set_authorized_keys`].  Clients, on the other hand,
 /// authenticate by setting their secret key with
-/// [`OssuaryContext::set_secret_key`].
+/// [`OssuaryConnection::set_secret_key`].
 ///
-/// A server must create one OssuaryContext per connected client.  Multiple
+/// A server must create one OssuaryConnection per connected client.  Multiple
 /// connections cannot be multiplexed in one context.
 ///
-/// A OssuaryContext keeps temporary buffers for both received and soon-to-be
+/// A OssuaryConnection keeps temporary buffers for both received and soon-to-be
 /// transmitted data.  This means they are not particularly small objects, but
 /// in exchange they can read and write from/to streams set in non-blocking mode
 /// without blocking single-threaded applications.
 ///
-pub struct OssuaryContext {
+pub struct OssuaryConnection {
     state: ConnectionState,
     conn_type: ConnectionType,
     local_key: SessionKeyMaterial, // session key
@@ -773,9 +772,9 @@ pub struct OssuaryContext {
     write_buf: [u8; PACKET_BUF_SIZE],
     write_buf_used: usize,
 }
-impl Default for OssuaryContext {
+impl Default for OssuaryConnection {
     fn default() -> Self {
-        OssuaryContext {
+        OssuaryConnection {
             state: ConnectionState::ClientSendHandshake,
             conn_type: ConnectionType::Client,
             local_key: Default::default(),
@@ -792,12 +791,12 @@ impl Default for OssuaryContext {
         }
     }
 }
-impl OssuaryContext {
-    /// Allocate a new OssuaryContext.
+impl OssuaryConnection {
+    /// Allocate a new OssuaryConnection.
     ///
     /// `conn_type` is a [`ConnectionType`] indicating whether this instance
     /// is for a client or server.
-    pub fn new(conn_type: ConnectionType) -> OssuaryContext {
+    pub fn new(conn_type: ConnectionType) -> OssuaryConnection {
         //let mut rng = thread_rng();
         let mut rng = OsRng::new().expect("RNG not available.");
         let sec_key = EphemeralSecret::new(&mut rng);
@@ -820,7 +819,7 @@ impl OssuaryContext {
             public_key: None,
             secret_key: None,
         };
-        OssuaryContext {
+        OssuaryConnection {
             state: match conn_type {
                 ConnectionType::Client => ConnectionState::ClientSendHandshake,
                 _ => ConnectionState::ServerWaitHandshake(std::time::SystemTime::now()),
@@ -846,7 +845,7 @@ impl OssuaryContext {
     /// connection, such as when the client's key is not authorized.
     ///
     fn reset_state(&mut self, permanent_err: Option<OssuaryError>) {
-        let default = OssuaryContext::new(self.conn_type.clone());
+        let default = OssuaryConnection::new(self.conn_type.clone());
         *self = default;
         self.state = match permanent_err {
             None => {
@@ -934,7 +933,7 @@ impl OssuaryContext {
     }
     /// Get the client's authentication public verification key
     ///
-    /// When a secret key is set with [`OssuaryContext::set_secret_key`], the
+    /// When a secret key is set with [`OssuaryConnection::set_secret_key`], the
     /// matching public key is calculated.  This function returns that public
     /// key, which can be shared with a remote server for future authentication.
     ///
@@ -1529,7 +1528,7 @@ fn interpret_packet_extra<'a, T>(pkt: &'a NetworkPacket)
 ///
 /// On success, returns a NetworkPacket struct containing the header and data,
 /// and a `usize` indicating how many bytes were consumed from the input buffer.
-fn read_packet<T,U>(conn: &mut OssuaryContext,
+fn read_packet<T,U>(conn: &mut OssuaryConnection,
                     mut stream: T) ->Result<(NetworkPacket, usize), OssuaryError>
 where T: std::ops::DerefMut<Target = U>,
       U: std::io::Read {
@@ -1575,13 +1574,13 @@ where T: std::ops::DerefMut<Target = U>,
     header_size + packet_len))
 }
 
-/// Write a packet from OssuaryContext's internal storage to the out buffer.
+/// Write a packet from OssuaryConnection's internal storage to the out buffer.
 ///
 /// All packets are buffered to internal storage before writing, so this is
 /// the function responsible for putting all packets "on the wire".
 ///
 /// On success, returns the number of bytes written to the output buffer
-fn write_stored_packet<T,U>(conn: &mut OssuaryContext,
+fn write_stored_packet<T,U>(conn: &mut OssuaryConnection,
                             stream: &mut T) -> Result<usize, OssuaryError>
 where T: std::ops::DerefMut<Target = U>,
       U: std::io::Write {
@@ -1610,14 +1609,14 @@ where T: std::ops::DerefMut<Target = U>,
     Ok(written)
 }
 
-/// Write a packet to the OssuaryContext's internal packet buffer
+/// Write a packet to the OssuaryConnection's internal packet buffer
 ///
 /// All packets are buffered internally because there is no guarantee that a
 /// complete packet can be written without blocking, and Ossuary is a non-
 /// blocking library.
 ///
 /// On success, returns the number of bytes written to the output buffer.
-fn write_packet<T,U>(conn: &mut OssuaryContext,
+fn write_packet<T,U>(conn: &mut OssuaryConnection,
                      stream: &mut T, data: &[u8],
                      kind: PacketType) -> Result<usize, OssuaryError>
 where T: std::ops::DerefMut<Target = U>,
@@ -1640,7 +1639,7 @@ mod tests {
 
     #[test]
     fn test_set_authorized_keys() {
-        let mut conn = OssuaryContext::new(ConnectionType::AuthenticatedServer);
+        let mut conn = OssuaryConnection::new(ConnectionType::AuthenticatedServer);
 
         // Vec of slices
         let keys: Vec<&[u8]> = vec![
