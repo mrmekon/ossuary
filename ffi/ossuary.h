@@ -23,6 +23,8 @@ int32_t ossuary_add_authorized_key(OssuaryConnection *conn, const uint8_t key[32
 int32_t ossuary_add_authorized_keys(OssuaryConnection *conn, uint8_t *key[], uint8_t count);
 int32_t ossuary_remote_public_key(OssuaryConnection *conn,
                                   uint8_t *key_buf, uint16_t key_buf_len);
+int32_t ossuary_generate_auth_keypair(uint8_t *secret_buf, uint16_t secret_buf_len,
+                                      uint8_t *public_buf, uint16_t public_buf_len);
 int32_t ossuary_recv_handshake(OssuaryConnection *conn,
                                uint8_t *in_buf, uint16_t *in_buf_len);
 int32_t ossuary_send_handshake(OssuaryConnection *conn,

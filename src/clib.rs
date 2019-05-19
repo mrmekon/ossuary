@@ -1,4 +1,4 @@
-use crate::{OssuaryConnection, ConnectionType, OssuaryError, KEY_LEN};
+use crate::{OssuaryConnection, ConnectionType, OssuaryError, KEY_LEN, generate_auth_keypair};
 
 pub const OSSUARY_ERR_WOULD_BLOCK: i32 = -64;
 pub const OSSUARY_ERR_UNTRUSTED_SERVER: i32 = -65;
@@ -45,12 +45,12 @@ pub extern "C" fn ossuary_add_authorized_key(conn: *mut OssuaryConnection,
     let r_key_buf: &[u8] = unsafe {
         std::slice::from_raw_parts(key_buf, KEY_LEN)
     };
-    let added = match conn.add_authorized_key(r_key_buf) {
-        Ok(_) => true,
-        Err(_) => false,
+    let res = match conn.add_authorized_key(r_key_buf) {
+        Ok(_) => 0i32,
+        Err(_) => -1i32,
     };
     ::std::mem::forget(conn);
-    added as i32
+    res
 }
 
 #[no_mangle]
@@ -253,13 +253,39 @@ pub extern "C" fn ossuary_remote_public_key(conn: *mut OssuaryConnection,
     let r_key_buf: &mut [u8] = unsafe {
         std::slice::from_raw_parts_mut(key_buf, KEY_LEN)
     };
-    let found = match conn.remote_public_key() {
+    let res = match conn.remote_public_key() {
         Ok(key) => {
             r_key_buf.copy_from_slice(key);
-            true
+            0i32
         },
-        Err(_) => false,
+        Err(_) => -1i32,
     };
     ::std::mem::forget(conn);
-    found as i32
+    res
+}
+
+#[no_mangle]
+pub extern "C" fn ossuary_generate_auth_keypair(secret_buf: *mut u8, secret_buf_len: u16,
+                                                public_buf: *mut u8, public_buf_len: u16) -> i32 {
+    if secret_buf.is_null() || public_buf.is_null() {
+        return -1i32;
+    }
+    if secret_buf_len < KEY_LEN as u16 || public_buf_len < KEY_LEN as u16 {
+        return -1i32;
+    }
+    let r_secret: &mut [u8] = unsafe {
+        std::slice::from_raw_parts_mut(secret_buf, KEY_LEN)
+    };
+    let r_public: &mut [u8] = unsafe {
+        std::slice::from_raw_parts_mut(public_buf, KEY_LEN)
+    };
+    let res = match generate_auth_keypair() {
+        Ok((s,p)) => {
+            r_secret.copy_from_slice(&s);
+            r_public.copy_from_slice(&p);
+            0i32
+        }
+        _ => -1i32,
+    };
+    res
 }

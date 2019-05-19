@@ -129,7 +129,6 @@
 //  - limit connection retries
 //  - tests should check their received strings
 //  - rustdoc everything
-//  - expose generate_auth_keypair in FFI
 //
 
 pub mod clib;
