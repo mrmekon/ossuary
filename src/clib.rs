@@ -1,16 +1,25 @@
-use crate::{OssuaryConnection, ConnectionType, OssuaryError};
+use crate::{OssuaryConnection, ConnectionType, OssuaryError, KEY_LEN};
 
-const ERROR_WOULD_BLOCK: i32 = -64;
+pub const OSSUARY_ERR_WOULD_BLOCK: i32 = -64;
+pub const OSSUARY_ERR_UNTRUSTED_SERVER: i32 = -65;
 
 #[no_mangle]
-pub extern "C" fn ossuary_create_connection(conn_type: u8) -> *mut OssuaryConnection {
+pub extern "C" fn ossuary_create_connection(conn_type: u8, auth_key: *const u8) -> *mut OssuaryConnection {
     let conn_type: ConnectionType = match conn_type {
         0 => ConnectionType::Client,
         1 => ConnectionType::AuthenticatedServer,
         2 => ConnectionType::UnauthenticatedServer,
         _ => { return ::std::ptr::null_mut(); }
     };
-    let mut conn = Box::new(OssuaryConnection::new(conn_type));
+    let key: Option<&[u8]> = match auth_key.is_null() {
+        false => unsafe { Some(std::slice::from_raw_parts(auth_key, 32)) },
+        true => None,
+    };
+    let conn = match OssuaryConnection::new(conn_type, key) {
+        Ok(c) => c,
+        Err(_e) => return ::std::ptr::null_mut(),
+    };
+    let mut conn = Box::new(conn);
     let ptr: *mut _ = &mut *conn;
     ::std::mem::forget(conn);
     ptr
@@ -27,7 +36,25 @@ pub extern "C" fn ossuary_destroy_connection(conn: &mut *mut OssuaryConnection) 
 }
 
 #[no_mangle]
-pub extern "C" fn ossuary_set_authorized_keys(conn: *mut OssuaryConnection,
+pub extern "C" fn ossuary_add_authorized_key(conn: *mut OssuaryConnection,
+                                             key_buf: *const u8) -> i32 {
+    if conn.is_null() || key_buf.is_null() {
+        return -1i32;
+    }
+    let conn = unsafe { &mut *conn };
+    let r_key_buf: &[u8] = unsafe {
+        std::slice::from_raw_parts(key_buf, KEY_LEN)
+    };
+    let added = match conn.add_authorized_key(r_key_buf) {
+        Ok(_) => true,
+        Err(_) => false,
+    };
+    ::std::mem::forget(conn);
+    added as i32
+}
+
+#[no_mangle]
+pub extern "C" fn ossuary_add_authorized_keys(conn: *mut OssuaryConnection,
                                               keys: *const *const u8,
                                               key_count: u8) -> i32 {
     if conn.is_null() || keys.is_null() {
@@ -42,7 +69,7 @@ pub extern "C" fn ossuary_set_authorized_keys(conn: *mut OssuaryConnection,
             r_keys.push(key);
         }
     }
-    let written = match conn.set_authorized_keys(r_keys) {
+    let written = match conn.add_authorized_keys(r_keys) {
         Ok(c) => c as i32,
         Err(_) => -1i32,
     };
@@ -83,7 +110,7 @@ pub extern "C" fn ossuary_recv_handshake(conn: *mut OssuaryConnection,
         },
         Err(OssuaryError::WouldBlock(b)) => {
             unsafe { *in_buf_len = b as u16; }
-            ERROR_WOULD_BLOCK
+            OSSUARY_ERR_WOULD_BLOCK
         },
         _ => -1i32,
     };
@@ -108,7 +135,7 @@ pub extern "C" fn ossuary_send_handshake(conn: *mut OssuaryConnection,
         },
         Err(OssuaryError::WouldBlock(w)) => {
             unsafe { *out_buf_len = w as u16 };
-            ERROR_WOULD_BLOCK
+            OSSUARY_ERR_WOULD_BLOCK
         },
         Err(_) => -1,
     };
@@ -117,15 +144,16 @@ pub extern "C" fn ossuary_send_handshake(conn: *mut OssuaryConnection,
 }
 
 #[no_mangle]
-pub extern "C" fn ossuary_handshake_done(conn: *const OssuaryConnection) -> i32 {
+pub extern "C" fn ossuary_handshake_done(conn: *mut OssuaryConnection) -> i32 {
     if conn.is_null() {
         return -1i32;
     }
-    let conn = unsafe { &*conn };
+    let conn = unsafe { &mut *conn };
     let done = conn.handshake_done();
     ::std::mem::forget(conn);
     match done {
         Ok(done) => done as i32,
+        Err(OssuaryError::UntrustedServer(_)) => OSSUARY_ERR_UNTRUSTED_SERVER,
         Err(_) => -1i32,
     }
 }
@@ -152,7 +180,7 @@ pub extern "C" fn ossuary_send_data(conn: *mut OssuaryConnection,
         },
         Err(OssuaryError::WouldBlock(w)) => {
             unsafe { *out_buf_len = w as u16; }
-            ERROR_WOULD_BLOCK
+            OSSUARY_ERR_WOULD_BLOCK
         },
         Err(_) => -1i32,
     };
@@ -187,7 +215,7 @@ pub extern "C" fn ossuary_recv_data(conn: *mut OssuaryConnection,
             unsafe {
                 *out_buf_len = w as u16;
             };
-            ERROR_WOULD_BLOCK
+            OSSUARY_ERR_WOULD_BLOCK
         },
         Err(_) => -1i32,
     };
@@ -208,9 +236,30 @@ pub extern "C" fn ossuary_flush(conn: *mut OssuaryConnection,
     let mut out_slice = r_out_buf;
     let bytes_written = match conn.flush(&mut out_slice) {
         Ok(x) => x as i32,
-        Err(OssuaryError::WouldBlock(_)) => ERROR_WOULD_BLOCK,
+        Err(OssuaryError::WouldBlock(_)) => OSSUARY_ERR_WOULD_BLOCK,
         Err(_) => -1i32,
     };
     ::std::mem::forget(conn);
     bytes_written
+}
+
+#[no_mangle]
+pub extern "C" fn ossuary_remote_public_key(conn: *mut OssuaryConnection,
+                                            key_buf: *mut u8, key_buf_len: u16) -> i32 {
+    if conn.is_null() || key_buf.is_null() || key_buf_len < KEY_LEN as u16 {
+        return -1i32;
+    }
+    let conn = unsafe { &mut *conn };
+    let r_key_buf: &mut [u8] = unsafe {
+        std::slice::from_raw_parts_mut(key_buf, KEY_LEN)
+    };
+    let found = match conn.remote_public_key() {
+        Ok(key) => {
+            r_key_buf.copy_from_slice(key);
+            true
+        },
+        Err(_) => false,
+    };
+    ::std::mem::forget(conn);
+    found as i32
 }

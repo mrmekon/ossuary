@@ -188,7 +188,9 @@ impl OssuaryConnection {
         }
         let written = match self.state {
             // No-op states
-            ConnectionState::Encrypted => {0},
+            ConnectionState::Encrypted |
+            ConnectionState::ClientRaiseUntrustedServer |
+            ConnectionState::ClientWaitServerApproval => {0},
 
             // Timeout wait states
             ConnectionState::ServerWaitHandshake(t) |
@@ -387,8 +389,11 @@ impl OssuaryConnection {
         }
         self.remote_msg_id = pkt.header.msg_id + 1;
 
-        println!("Recv packet: ({}) {:?} <- {:?}", self.is_server(), self.state, pkt.kind());
         match self.state {
+            // no-op states
+            ConnectionState::ClientRaiseUntrustedServer |
+            ConnectionState::ClientWaitServerApproval => {},
+
             // Non-receive states.  Receiving handshake data is an error.
             ConnectionState::ClientSendHandshake |
             ConnectionState::ClientSendAuthentication |
@@ -472,28 +477,31 @@ impl OssuaryConnection {
                                         return Err(OssuaryError::InvalidSignature);
                                     }
                                 };
-                                // TODO: support trust on first use
-                                if self.authorized_keys.len() > 0 {
-                                    if chal.iter().all(|x| *x == 0) ||
-                                        sig.iter().all(|x| *x == 0) ||
-                                        enc_pkt.public_key.iter().all(|x| *x == 0) {
-                                            // Parameters must be non-zero
-                                            self.reset_state(None);
-                                            return Err(OssuaryError::InvalidSignature);
-                                        }
-                                    // This is the first encrypted message, so the nonce has not changed yet
-                                    let mut sign_data = [0u8; KEY_LEN + NONCE_LEN + CHALLENGE_LEN];
-                                    sign_data[0..KEY_LEN].copy_from_slice(self.remote_key.as_ref().map(|k| &k.public).unwrap_or(&[0u8; KEY_LEN]));
-                                    sign_data[KEY_LEN..KEY_LEN+NONCE_LEN].copy_from_slice(self.remote_key.as_ref().map(|k| &k.nonce).unwrap_or(&[0u8; NONCE_LEN]));
-                                    sign_data[KEY_LEN+NONCE_LEN..].copy_from_slice(&self.local_auth.challenge.unwrap_or([0u8; CHALLENGE_LEN]));
-                                    match pubkey.verify(&sign_data, &signature) {
-                                        Ok(_) => {},
-                                        Err(_) => {
-                                            self.reset_state(None);
-                                            return Err(OssuaryError::InvalidSignature);
-                                        },
+
+                                // All servers should have an auth key set, so
+                                // these parameters should be non-zero and the
+                                // signature should verify.
+                                if chal.iter().all(|x| *x == 0) ||
+                                    sig.iter().all(|x| *x == 0) ||
+                                    enc_pkt.public_key.iter().all(|x| *x == 0) {
+                                        // Parameters must be non-zero
+                                        self.reset_state(None);
+                                        return Err(OssuaryError::InvalidSignature);
                                     }
+
+                                // This is the first encrypted message, so the nonce has not changed yet
+                                let mut sign_data = [0u8; KEY_LEN + NONCE_LEN + CHALLENGE_LEN];
+                                sign_data[0..KEY_LEN].copy_from_slice(self.remote_key.as_ref().map(|k| &k.public).unwrap_or(&[0u8; KEY_LEN]));
+                                sign_data[KEY_LEN..KEY_LEN+NONCE_LEN].copy_from_slice(self.remote_key.as_ref().map(|k| &k.nonce).unwrap_or(&[0u8; NONCE_LEN]));
+                                sign_data[KEY_LEN+NONCE_LEN..].copy_from_slice(&self.local_auth.challenge.unwrap_or([0u8; CHALLENGE_LEN]));
+                                match pubkey.verify(&sign_data, &signature) {
+                                    Ok(_) => {},
+                                    Err(_) => {
+                                        self.reset_state(None);
+                                        return Err(OssuaryError::InvalidSignature);
+                                    },
                                 }
+
                                 self.remote_auth = AuthKeyMaterial {
                                     challenge: Some(chal),
                                     public_key: Some(pubkey),
@@ -501,7 +509,11 @@ impl OssuaryConnection {
                                     secret_key: None,
                                 };
                                 let _ = self.remote_key.as_mut().map(|k| increment_nonce(&mut k.nonce));
-                                self.state = ConnectionState::ClientSendAuthentication;
+
+                                match self.authorized_keys.contains(&enc_pkt.public_key) {
+                                    true => self.state = ConnectionState::ClientSendAuthentication,
+                                    false => self.state = ConnectionState::ClientRaiseUntrustedServer,
+                                }
                             }
                         }
                     },
@@ -556,7 +568,6 @@ impl OssuaryConnection {
                                     }
                                 };
                                 match self.conn_type {
-                                    // TODO: only permit known pubkeys
                                     ConnectionType::AuthenticatedServer => {
                                         if challenge.iter().all(|x| *x == 0) ||
                                             sig.iter().all(|x| *x == 0) ||
@@ -565,6 +576,7 @@ impl OssuaryConnection {
                                                 self.reset_state(None);
                                                 return Err(OssuaryError::InvalidSignature);
                                         }
+
                                         // This is the first encrypted message, so the nonce has not changed yet
                                         let mut sign_data = [0u8; KEY_LEN + NONCE_LEN + CHALLENGE_LEN];
                                         sign_data[0..KEY_LEN].copy_from_slice(self.remote_key.as_ref().map(|k| &k.public).unwrap_or(&[0u8; KEY_LEN]));
@@ -575,6 +587,15 @@ impl OssuaryConnection {
                                             Err(_) => {
                                                 self.reset_state(None);
                                                 return Err(OssuaryError::InvalidSignature);
+                                            },
+                                        }
+
+                                        // Ensure this key is permitted to connect
+                                        match self.authorized_keys.contains(&enc_pkt.public_key) {
+                                            true => {},
+                                            false => {
+                                                self.reset_state(None);
+                                                return Err(OssuaryError::InvalidKey);
                                             },
                                         }
                                     }
@@ -607,10 +628,31 @@ impl OssuaryConnection {
     /// Returns whether the handshake process is complete.
     ///
     ///
-    pub fn handshake_done(&self) -> Result<bool, &OssuaryError> {
+    pub fn handshake_done(&mut self) -> Result<bool, OssuaryError> {
+        let failed = match self.state {
+            ConnectionState::Failed(_) => true,
+            _ => false,
+        };
+        if failed {
+            let mut new_state = ConnectionState::Failed(OssuaryError::ConnectionFailed);
+            std::mem::swap(&mut self.state, &mut new_state);
+            match new_state {
+                ConnectionState::Failed(e) => return Err(e),
+                _ => return Err(OssuaryError::ConnectionFailed),
+            }
+        }
         match self.state {
             ConnectionState::Encrypted => Ok(true),
-            ConnectionState::Failed(ref e) => Err(e),
+            ConnectionState::Failed(ref _e) => Err(OssuaryError::ConnectionFailed),
+            ConnectionState::ClientRaiseUntrustedServer => {
+                self.state = ConnectionState::ClientWaitServerApproval;
+                let mut key: Vec<u8> = Vec::new();
+                match self.remote_auth.public_key {
+                    Some(ref p) => key.extend_from_slice(p.as_bytes()),
+                    None => key.extend_from_slice(&[0; KEY_LEN]),
+                };
+                Err(OssuaryError::UntrustedServer(key))
+            },
             _ => Ok(false),
         }
     }

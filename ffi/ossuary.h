@@ -5,15 +5,24 @@
 typedef struct OssuaryConnection OssuaryConnection;
 
 typedef enum {
-  CONN_TYPE_CLIENT = 0x00,
-  CONN_TYPE_AUTHENTICATED_SERVER = 0x01,
-  CONN_TYPE_UNAUTHENTICATED_SERVER = 0x02,
-} connection_type_t;
+  OSSUARY_CONN_TYPE_CLIENT = 0x00,
+  OSSUARY_CONN_TYPE_AUTHENTICATED_SERVER = 0x01,
+  OSSUARY_CONN_TYPE_UNAUTHENTICATED_SERVER = 0x02,
+} ossuary_conn_type_t;
 
-OssuaryConnection *ossuary_create_connection(connection_type_t type);
+typedef enum {
+  OSSUARY_ERR_OTHER = -1,
+  OSSUARY_ERR_WOULDBLOCK = -64,
+  OSSUARY_ERR_UNTRUSTED_SERVER = -65,
+} ossuary_error_t;
+
+OssuaryConnection *ossuary_create_connection(ossuary_conn_type_t type, const uint8_t auth_key[32]);
 int32_t ossuary_destroy_connection(OssuaryConnection **conn);
-int32_t ossuary_set_secret_key(OssuaryConnection *conn, uint8_t key[32]);
-int32_t ossuary_set_authorized_keys(OssuaryConnection *conn, uint8_t *key[], uint8_t count);
+int32_t ossuary_set_secret_key(OssuaryConnection *conn, const uint8_t key[32]);
+int32_t ossuary_add_authorized_key(OssuaryConnection *conn, const uint8_t key[32]);
+int32_t ossuary_add_authorized_keys(OssuaryConnection *conn, uint8_t *key[], uint8_t count);
+int32_t ossuary_remote_public_key(OssuaryConnection *conn,
+                                  uint8_t *key_buf, uint16_t key_buf_len);
 int32_t ossuary_recv_handshake(OssuaryConnection *conn,
                                uint8_t *in_buf, uint16_t *in_buf_len);
 int32_t ossuary_send_handshake(OssuaryConnection *conn,

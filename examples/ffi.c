@@ -30,12 +30,13 @@ int main(int argc, char **argv) {
   uint16_t client_bytes, server_bytes, bytes, out_len;
   OssuaryConnection *client_conn = NULL;
   OssuaryConnection *server_conn = NULL;
+  uint8_t remote_key[32];
 
-  client_conn = ossuary_create_connection(CONN_TYPE_CLIENT);
+  client_conn = ossuary_create_connection(OSSUARY_CONN_TYPE_CLIENT, NULL);
   ossuary_set_secret_key(client_conn, secret_key);
 
-  server_conn = ossuary_create_connection(CONN_TYPE_AUTHENTICATED_SERVER);
-  ossuary_set_authorized_keys(server_conn, authorized_keys, 1);
+  server_conn = ossuary_create_connection(OSSUARY_CONN_TYPE_AUTHENTICATED_SERVER, NULL);
+  ossuary_add_authorized_keys(server_conn, authorized_keys, 1);
 
   memset(client_buf, 0, sizeof(client_buf));
   memset(server_buf, 0, sizeof(server_buf));
@@ -46,6 +47,12 @@ int main(int argc, char **argv) {
     client_done = ossuary_handshake_done(client_conn);
     server_done = ossuary_handshake_done(server_conn);
     printf("done: %d %d\n", client_done, server_done);
+
+    // Trust-On-First-Use
+    if (client_done == OSSUARY_ERR_UNTRUSTED_SERVER) {
+      ossuary_remote_public_key(client_conn, remote_key, sizeof(remote_key));
+      ossuary_add_authorized_key(client_conn, remote_key);
+    }
 
     if (!client_done) {
       client_bytes = sizeof(client_buf);

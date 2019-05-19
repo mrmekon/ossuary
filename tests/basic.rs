@@ -9,7 +9,18 @@ fn event_loop<T>(mut conn: OssuaryConnection,
                  is_server: bool) -> Result<(), std::io::Error>
 where T: std::io::Read + std::io::Write {
     // Run the opaque handshake until the connection is established
-    while conn.handshake_done().unwrap() == false {
+    loop {
+        match conn.handshake_done() {
+            Ok(true) => break,
+            Ok(false) => {},
+            Err(OssuaryError::UntrustedServer(pubkey)) => {
+                // Trust-On-First-Use would be implemented here.  This
+                // client trusts all servers.
+                let keys: Vec<&[u8]> = vec![&pubkey];
+                let _ = conn.add_authorized_keys(keys).unwrap();
+            }
+            Err(e) => panic!("Handshake failed with error: {:?}", e),
+        }
         if conn.send_handshake(&mut stream).is_ok() {
             loop {
                 match conn.recv_handshake(&mut stream) {
@@ -50,7 +61,8 @@ fn server() -> Result<(), std::io::Error> {
     let listener = TcpListener::bind("127.0.0.1:9988").unwrap();
     let stream: TcpStream = listener.incoming().next().unwrap().unwrap();
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(100u64)));
-    let conn = OssuaryConnection::new(ConnectionType::UnauthenticatedServer);
+    // This server lets any client connect
+    let conn = OssuaryConnection::new(ConnectionType::UnauthenticatedServer, None).unwrap();
     let _ = event_loop(conn, stream, true);
     Ok(())
 }
@@ -58,7 +70,7 @@ fn server() -> Result<(), std::io::Error> {
 fn client() -> Result<(), std::io::Error> {
     let stream = TcpStream::connect("127.0.0.1:9988").unwrap();
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(100u64)));
-    let conn = OssuaryConnection::new(ConnectionType::Client);
+    let conn = OssuaryConnection::new(ConnectionType::Client, None).unwrap();
     let _ = event_loop(conn, stream, false);
     Ok(())
 }

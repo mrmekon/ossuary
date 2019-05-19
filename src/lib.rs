@@ -25,7 +25,7 @@
 //! are encrypted with the established session key.
 //!
 //! In the following diagram, fields in [single brackets] are sent in the clear,
-//! and those in [[double brackets]] are encrypted:
+//! and those in [[double brackets]] are encrypted with the shared session key:
 //!
 //! ```text
 //! <client> --> [  session x25519 public key,
@@ -124,14 +124,13 @@
 
 //
 // TODO
-//  - server certificate (TOFU)
 //  - consider all unexpected packet types to be errors
 //  - ensure that a reset on one end always sends a reset to the other
 //  - limit connection retries
 //  - tests should check their received strings
 //  - rustdoc everything
+//  - expose generate_auth_keypair in FFI
 //
-// TODO: raise OssuaryError::UntrustedServer() when trust-on-first-use
 
 pub mod clib;
 mod connection;
@@ -149,6 +148,8 @@ extern crate chacha20_poly1305_aead;
 use chacha20_poly1305_aead::{encrypt,decrypt};
 use x25519_dalek::{EphemeralSecret, EphemeralPublic, SharedSecret};
 use ed25519_dalek::{Signature, Keypair, SecretKey, PublicKey};
+
+use rand::rngs::OsRng;
 
 const PROTOCOL_VERSION: u8 = 1u8;
 
@@ -298,6 +299,23 @@ enum ConnectionState {
     /// Next client state: Encrypted
     ClientSendAuthentication,
 
+    /// Client is about to raise an UntrustedServer error to the caller
+    ///
+    /// The client has established and verified a connection with a remote
+    /// server, but the server's authentication key is unknown.  The
+    /// [`OssuaryError::UntrustedServer`] will be raised on the next call to
+    /// [`OssuaryConnection::handhake_done`].
+    ClientRaiseUntrustedServer,
+
+    /// Client is waiting for the caller to approve an unknown remote server
+    ///
+    /// After raising [`OssuaryError::UntrustedServer`], the client waits in
+    /// this state until the server's public key is added to the list of
+    /// authorized keys with [`OssuaryConnection::add_authorized_key`], or
+    /// the connection is killed.  This permits callers to implement a
+    /// Trust-On-First-Use policy.
+    ClientWaitServerApproval,
+
     /// Connection is established, encrypted, and optionally authenticated.
     Encrypted,
 
@@ -332,7 +350,7 @@ pub enum ConnectionType {
     /// Authenticated servers only allow connections from clients with secret
     /// keys set using [`OssuaryConnection::set_secret_key`], and with the
     /// matching public key registered with the server using
-    /// [`OssuaryConnection::set_authorized_keys`].
+    /// [`OssuaryConnection::add_authorized_keys`].
     AuthenticatedServer,
 
     /// This context is a server that does not support authentication.
@@ -354,7 +372,7 @@ pub enum ConnectionType {
 /// [`ConnectionType`] identifying whether it is to act as a client or server.
 /// Server contexts can optionally require authentication, verified by providing
 /// a list of public keys of permitted clients with
-/// [`OssuaryConnection::set_authorized_keys`].  Clients, on the other hand,
+/// [`OssuaryConnection::add_authorized_keys`].  Clients, on the other hand,
 /// authenticate by setting their secret key with
 /// [`OssuaryConnection::set_secret_key`].
 ///
@@ -403,6 +421,13 @@ impl Default for OssuaryConnection {
     }
 }
 
+/// Generate secret/public Ed25519 keypair for host authentication
+pub fn generate_auth_keypair() -> Result<([u8; KEY_LEN],[u8; KEY_LEN]), OssuaryError> {
+    let mut rng = OsRng::new()?;
+    let keypair: Keypair = Keypair::generate(&mut rng);
+    Ok((keypair.secret.to_bytes(), keypair.public.to_bytes()))
+}
+
 /// Cast the data bytes in a NetworkPacket into a struct
 fn interpret_packet<'a, T>(pkt: &'a NetworkPacket) -> Result<&'a T, OssuaryError> {
     let s: &T = slice_as_struct(&pkt.data)?;
@@ -448,8 +473,8 @@ mod tests {
     use crate::*;
 
     #[test]
-    fn test_set_authorized_keys() {
-        let mut conn = OssuaryConnection::new(ConnectionType::AuthenticatedServer);
+    fn test_add_authorized_keys() {
+        let mut conn = OssuaryConnection::new(ConnectionType::AuthenticatedServer, None).unwrap();
 
         // Vec of slices
         let keys: Vec<&[u8]> = vec![
@@ -458,7 +483,7 @@ mod tests {
               0xbb, 0x9e, 0x86, 0x62, 0x28, 0x7c, 0x33, 0x89,
               0xa2, 0xe1, 0x63, 0xdc, 0x55, 0xde, 0x28, 0x1f]
         ];
-        let _ = conn.set_authorized_keys(keys).unwrap();
+        let _ = conn.add_authorized_keys(keys).unwrap();
 
         // Vec of owned arrays
         let keys: Vec<[u8; 32]> = vec![
@@ -467,7 +492,7 @@ mod tests {
              0xbb, 0x9e, 0x86, 0x62, 0x28, 0x7c, 0x33, 0x89,
              0xa2, 0xe1, 0x63, 0xdc, 0x55, 0xde, 0x28, 0x1f]
         ];
-        let _ = conn.set_authorized_keys(keys.iter().map(|x| x.as_ref()).collect::<Vec<&[u8]>>()).unwrap();
+        let _ = conn.add_authorized_keys(keys.iter().map(|x| x.as_ref()).collect::<Vec<&[u8]>>()).unwrap();
 
         // Vec of vecs
         let keys: Vec<Vec<u8>> = vec![
@@ -476,6 +501,6 @@ mod tests {
                  0xbb, 0x9e, 0x86, 0x62, 0x28, 0x7c, 0x33, 0x89,
                  0xa2, 0xe1, 0x63, 0xdc, 0x55, 0xde, 0x28, 0x1f]
         ];
-        let _ = conn.set_authorized_keys(keys.iter().map(|x| x.as_slice())).unwrap();
+        let _ = conn.add_authorized_keys(keys.iter().map(|x| x.as_slice())).unwrap();
     }
 }

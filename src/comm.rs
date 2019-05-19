@@ -147,6 +147,7 @@ impl OssuaryConnection {
                 return Err(OssuaryError::InvalidKey);;
             }
         };
+        increment_nonce(&mut self.local_key.nonce);
 
         let pkt: EncryptedPacket = EncryptedPacket {
             tag_len: tag.len() as u16,
@@ -158,7 +159,6 @@ impl OssuaryConnection {
         buf.extend(&tag);
         let written = write_packet(self, &mut out_buf, &buf,
                                    PacketType::EncryptedData)?;
-        increment_nonce(&mut self.local_key.nonce);
         Ok(written)
     }
 

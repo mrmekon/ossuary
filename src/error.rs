@@ -31,16 +31,38 @@ pub enum OssuaryError {
     /// be processed immediately.
     WouldBlock(usize), // bytes consumed
 
+    /// Connection accepted by an unknown/untrusted server.
+    ///
+    /// Returned when, during the handshake process, the server correctly
+    /// verifies itself, but its public key is not specified as an authorized
+    /// key.  The caller may use this to implement a Trust-On-First-Use (TOFU)
+    /// policy.
+    ///
+    /// This error contains the public key of the remote server.
+    ///
+    /// After this is returned, the handshake process is paused until the caller
+    /// verifies that the key is to be trusted by calling
+    /// [`OssuaryConnection::add_authorized_keys`]] with the returned public
+    /// key.  This should only be done if the user has opted for a TOFU policy,
+    /// and this is the first time connecting to this remote host.
+    ///
+    /// It is the caller's responsibility to save a database of (host, key)
+    /// pairs when implementing TOFU.
+    UntrustedServer(Vec<u8>), // bytes consumed, public key
+
     /// Error casting received bytes to a primitive type.
     ///
     /// This error likely indicates a sync or corruption error in the data
     /// stream, and will trigger a connection reset.
     Unpack(core::array::TryFromSliceError),
 
+    /// Error reading from random number generator
+    NoRandomSource,
+
     /// An invalid sized encryption key was encountered.
     ///
     /// This error is most likely caused by an attempt to register an invalid
-    /// secret or public key in [`OssuaryConnection::set_authorized_keys`] or
+    /// secret or public key in [`OssuaryConnection::add_authorized_keys`] or
     /// [`OssuaryConnection::set_secret_key`].  Both should be 32 bytes.
     KeySize(usize, usize), // (expected, actual)
 
@@ -53,6 +75,9 @@ pub enum OssuaryError {
     /// This typically indicates an internal error, and will cause the
     /// connection to reset.
     InvalidKey,
+
+    /// Encrypted data failed to be decrypted
+    DecryptionFailed,
 
     /// The channel received an unexpected or malformed packet
     ///
@@ -103,6 +128,7 @@ impl std::fmt::Debug for OssuaryError {
             OssuaryError::Io(e) => write!(f, "OssuaryError::Io {}", e),
             OssuaryError::WouldBlock(_) => write!(f, "OssuaryError::WouldBlock"),
             OssuaryError::Unpack(_) => write!(f, "OssuaryError::Unpack"),
+            OssuaryError::NoRandomSource => write!(f, "OssuaryError::NoRandomSource"),
             OssuaryError::KeySize(_,_) => write!(f, "OssuaryError::KeySize"),
             OssuaryError::InvalidKey => write!(f, "OssuaryError::InvalidKey"),
             OssuaryError::InvalidPacket(_) => write!(f, "OssuaryError::InvalidPacket"),
@@ -110,6 +136,8 @@ impl std::fmt::Debug for OssuaryError {
             OssuaryError::InvalidSignature => write!(f, "OssuaryError::InvalidSignature"),
             OssuaryError::ConnectionReset => write!(f, "OssuaryError::ConnectionReset"),
             OssuaryError::ConnectionFailed => write!(f, "OssuaryError::ConnectionFailed"),
+            OssuaryError::UntrustedServer(_) => write!(f, "OssuaryError::UntrustedServer"),
+            OssuaryError::DecryptionFailed => write!(f, "OssuaryError::DecryptionFailed"),
         }
     }
 }
@@ -128,11 +156,16 @@ impl From<core::array::TryFromSliceError> for OssuaryError {
 }
 impl From<ed25519_dalek::SignatureError> for OssuaryError {
     fn from(_error: ed25519_dalek::SignatureError) -> Self {
-        OssuaryError::InvalidKey
+        OssuaryError::InvalidSignature
     }
 }
 impl From<chacha20_poly1305_aead::DecryptError> for OssuaryError {
     fn from(_error: chacha20_poly1305_aead::DecryptError) -> Self {
-        OssuaryError::InvalidKey
+        OssuaryError::DecryptionFailed
+    }
+}
+impl From<rand::Error> for OssuaryError {
+    fn from(_error: rand::Error) -> Self {
+        OssuaryError::NoRandomSource
     }
 }
