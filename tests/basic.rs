@@ -1,3 +1,10 @@
+// basic.rs
+//
+// Basic test of Ossuary communication library, without authentication
+//
+// Establishes a non-authenticated session between a client and server over a
+// TCP connection, and exchanges encrypted messages.
+//
 use ossuary::{OssuaryConnection, ConnectionType};
 use ossuary::OssuaryError;
 

@@ -1,3 +1,8 @@
+// clib_ffi.rs
+//
+// Tests the C FFI interface from Rust.
+// Performs handshake and exchanges a few messages.
+//
 use ossuary::clib::{
     ossuary_create_connection,
     ossuary_destroy_connection,
@@ -69,6 +74,7 @@ fn server() -> Result<(), std::io::Error> {
             &mut out_len);
         let _ = stream.write_all(&out_buf[0..sz as usize]).unwrap();
 
+        let mut msgs = Vec::<String>::new();
         let in_buf = reader.fill_buf().unwrap();
         if in_buf.len() > 0 {
             let mut out_len = out_buf.len() as u16;
@@ -80,9 +86,11 @@ fn server() -> Result<(), std::io::Error> {
             if len != -1 {
                 println!("CLIB READ: {:?}",
                          std::str::from_utf8(&out_buf[0..out_len as usize]).unwrap());
+                msgs.push(std::str::from_utf8(&out_buf[0..out_len as usize]).unwrap().into());
                 reader.consume(len as usize);
             }
         }
+        assert_eq!(msgs, vec!("from client".to_string()));
 
         ossuary_destroy_connection(&mut conn);
         break;
@@ -142,6 +150,7 @@ fn client() -> Result<(), std::io::Error> {
 
     //let mut stream = std::io::BufReader::new(stream);
     let mut count = 0;
+    let mut msgs = Vec::<String>::new();
     loop {
         let in_buf = reader.fill_buf().unwrap();
         if in_buf.len() == 0 || count == 2 {
@@ -159,10 +168,12 @@ fn client() -> Result<(), std::io::Error> {
         if len > 0 {
             println!("CLIB READ: {:?}",
                      std::str::from_utf8(&out_buf[0..out_len as usize]).unwrap());
+            msgs.push(std::str::from_utf8(&out_buf[0..out_len as usize]).unwrap().into());
             reader.consume(len as usize);
             count += 1;
         }
     }
+    assert_eq!(msgs, vec!("from server 1".to_string(), "from server 2".to_string()));
 
     ossuary_destroy_connection(&mut conn);
     Ok(())

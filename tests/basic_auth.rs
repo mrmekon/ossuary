@@ -1,3 +1,11 @@
+// basic_auth.rs
+//
+// Basic test of Ossuary communication library, with authentication
+//
+// Establishes a authenticated session between a client and server over a TCP
+// connection, and exchanges encrypted messages.  Both client and server only
+// accept connections from each other, authenticated with known keys.
+//
 use ossuary::{OssuaryConnection, ConnectionType};
 use ossuary::OssuaryError;
 

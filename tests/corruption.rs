@@ -1,21 +1,30 @@
+// corruption.rs
+//
+// Test cases for Ossuary handshakes with packet corruption
+//
+// Runs through a bunch of rounds of connection handshaking with corrupted data
+// injected at known points throughout the handshake.  Verifies that the correct
+// errors are raised, and that the connection either retries successfully or
+// fails permanently depending on the test.
+//
 use ossuary::{OssuaryConnection, ConnectionType};
 use ossuary::OssuaryError;
 
+#[derive(Debug)]
+enum Corruption {
+    ClientKey,
+    ClientNonce,
+    ClientChal,
+    ClientAuth,
+    ClientInvalidPkt,
+    ServerKey,
+    ServerNonce,
+    ServerAuth,
+    ServerInvalidPkt,
+}
+
 #[test]
 fn corruption() {
-    #[derive(Debug)]
-    enum Corruption {
-        ClientKey,
-        ClientNonce,
-        ClientChal,
-        ClientAuth,
-        ClientInvalidPkt,
-        ServerKey,
-        ServerNonce,
-        ServerAuth,
-        ServerInvalidPkt,
-    };
-
     // Corruption test tuple format:
     // (test type, loop iteration, byte offset, byte value, expected recv error, permanent)
     let corruptions = [
@@ -51,6 +60,7 @@ fn corruption() {
         LoopClient,
         LoopServer,
     };
+
     for corruption in &corruptions {
         println!("Corruption test: {:?}", corruption.0);
         let server_secret_key = &[
@@ -128,6 +138,9 @@ fn corruption() {
                     _ => panic!("Handshake failed: {:?}", e),
                 },
             }
+            // Check if handshake is done and call recv_data because recv_handshake()
+            // does not respond to connection resets after the connection is (thought
+            // to be) established.
             match send_conn.handshake_done() {
                 Ok(true) => {
                     let mut plaintext = Vec::<u8>::new();
