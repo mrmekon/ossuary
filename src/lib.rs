@@ -124,8 +124,6 @@
 
 //
 // TODO
-//  - consider all unexpected packet types to be errors
-//  - tests should check their received strings
 //  - rustdoc everything
 //
 

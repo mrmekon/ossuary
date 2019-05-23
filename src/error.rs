@@ -100,6 +100,11 @@ pub enum OssuaryError {
     /// handshake.  The connection will reset.
     InvalidSignature,
 
+    /// Remote host running an incompatible protocol version
+    ///
+    /// Parameters are (<remote version>, <local version>)
+    WrongProtocolVersion(u8, u8),
+
     /// The connection has reset, and reconnection may be possible.
     ///
     /// Ossuary does not attempt to recover from errors encountered on the data
@@ -139,6 +144,7 @@ impl std::fmt::Debug for OssuaryError {
             OssuaryError::ConnectionFailed => write!(f, "OssuaryError::ConnectionFailed"),
             OssuaryError::UntrustedServer(_) => write!(f, "OssuaryError::UntrustedServer"),
             OssuaryError::DecryptionFailed => write!(f, "OssuaryError::DecryptionFailed"),
+            OssuaryError::WrongProtocolVersion(r,l) => write!(f, "OssuaryError:WrongProtocolVersion {} != {}", r, l),
         }
     }
 }

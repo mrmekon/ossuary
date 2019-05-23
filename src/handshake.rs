@@ -2,6 +2,9 @@ use crate::*;
 
 use comm::{read_packet, write_packet, write_stored_packet};
 
+const CLIENT_HANDSHAKE_PACKET_LEN: usize = CHALLENGE_LEN + NONCE_LEN + KEY_LEN + 8;
+const CLIENT_AUTH_PACKET_LEN: usize = CLIENT_AUTH_SUBPACKET_LEN + 8;
+const SERVER_HANDSHAKE_PACKET_LEN: usize = NONCE_LEN + KEY_LEN + SERVER_HANDSHAKE_SUBPACKET_LEN + 8;
 const SERVER_HANDSHAKE_SUBPACKET_LEN: usize = ::std::mem::size_of::<ServerEncryptedHandshakePacket>() +
     ::std::mem::size_of::<EncryptedPacket>() + TAG_LEN;
 const CLIENT_AUTH_SUBPACKET_LEN: usize = ::std::mem::size_of::<ClientEncryptedAuthenticationPacket>() +
@@ -33,7 +36,7 @@ struct ClientHandshakePacket {
 impl Default for ClientHandshakePacket {
     fn default() -> ClientHandshakePacket {
         ClientHandshakePacket {
-            len: (CHALLENGE_LEN + NONCE_LEN + KEY_LEN + 8) as u16,
+            len: CLIENT_HANDSHAKE_PACKET_LEN as u16,
             version: PROTOCOL_VERSION,
             _reserved: [0u8; 5],
             public_key: [0u8; KEY_LEN],
@@ -52,7 +55,17 @@ impl ClientHandshakePacket {
     }
     fn from_packet(pkt: &NetworkPacket) -> Result<&ClientHandshakePacket, OssuaryError> {
         let hs_pkt = interpret_packet::<ClientHandshakePacket>(&pkt);
-        // TODO: validate len/version fields
+        match hs_pkt {
+            Ok(pkt) => {
+                if pkt.version != PROTOCOL_VERSION {
+                    return Err(OssuaryError::WrongProtocolVersion(pkt.version, PROTOCOL_VERSION));
+                }
+                if pkt.len as usize != CLIENT_HANDSHAKE_PACKET_LEN {
+                    return Err(OssuaryError::InvalidPacket("Unexpected packet size.".into()));
+                }
+            },
+            _ => {},
+        }
         hs_pkt
     }
 }
@@ -91,7 +104,7 @@ struct ServerHandshakePacket {
 impl Default for ServerHandshakePacket {
     fn default() -> ServerHandshakePacket {
         ServerHandshakePacket {
-            len: (NONCE_LEN + KEY_LEN + SERVER_HANDSHAKE_SUBPACKET_LEN + 8) as u16,
+            len: SERVER_HANDSHAKE_PACKET_LEN as u16,
             version: PROTOCOL_VERSION,
             _reserved: [0u8; 5],
             public_key: [0u8; KEY_LEN],
@@ -116,7 +129,17 @@ impl ServerHandshakePacket {
     }
     fn from_packet(pkt: &NetworkPacket) -> Result<&ServerHandshakePacket, OssuaryError> {
         let hs_pkt = interpret_packet::<ServerHandshakePacket>(&pkt);
-        // TODO: validate len/version fields
+        match hs_pkt {
+            Ok(pkt) => {
+                if pkt.version != PROTOCOL_VERSION {
+                    return Err(OssuaryError::WrongProtocolVersion(pkt.version, PROTOCOL_VERSION));
+                }
+                if pkt.len as usize != SERVER_HANDSHAKE_PACKET_LEN {
+                    return Err(OssuaryError::InvalidPacket("Unexpected packet size.".into()));
+                }
+            },
+            _ => {},
+        }
         hs_pkt
     }
 }
@@ -151,7 +174,7 @@ struct ClientAuthenticationPacket {
 impl Default for ClientAuthenticationPacket {
     fn default() -> ClientAuthenticationPacket {
         ClientAuthenticationPacket {
-            len: (CLIENT_AUTH_SUBPACKET_LEN + 8) as u16,
+            len: CLIENT_AUTH_PACKET_LEN as u16,
             version: PROTOCOL_VERSION,
             _reserved: [0u8; 5],
             subpacket: [0u8; CLIENT_AUTH_SUBPACKET_LEN],
@@ -171,7 +194,17 @@ impl ClientAuthenticationPacket {
     }
     fn from_packet(pkt: &NetworkPacket) -> Result<&ClientAuthenticationPacket, OssuaryError> {
         let hs_pkt = interpret_packet::<ClientAuthenticationPacket>(&pkt);
-        // TODO: validate len/version fields
+        match hs_pkt {
+            Ok(pkt) => {
+                if pkt.version != PROTOCOL_VERSION {
+                    return Err(OssuaryError::WrongProtocolVersion(pkt.version, PROTOCOL_VERSION));
+                }
+                if pkt.len as usize != CLIENT_AUTH_PACKET_LEN {
+                    return Err(OssuaryError::InvalidPacket("Unexpected packet size.".into()));
+                }
+            },
+            _ => {},
+        }
         hs_pkt
     }
 }
@@ -212,9 +245,6 @@ impl OssuaryConnection {
                 w
             },
 
-            // <client> --> [session x25519 public key,
-            //               session nonce,
-            //               client random challenge]      --> <server>
             ConnectionState::ClientSendHandshake => {
                 // Send session public key and nonce to initiate connection
                 let chal = self.local_auth.challenge.unwrap_or([0u8; CHALLENGE_LEN]);
@@ -227,11 +257,6 @@ impl OssuaryConnection {
                 w
             },
 
-            // <client> <-- [session x25519 public key,
-            //               session nonce],
-            //              [[server x25519 public key,
-            //                server random challenge,
-            //                client challenge signature]] <-- <server>
             ConnectionState::ServerSendHandshake => {
                 // Get a local copy of server's secret auth key, if it has one.
                 // Default to 0s.
@@ -284,8 +309,6 @@ impl OssuaryConnection {
                 w
             },
 
-            // <client> --> [[client x25519 public key,
-            //                server challenge signature]] --> <server>
             ConnectionState::ClientSendAuthentication => {
                 // Get a local copy of client's secret auth key, if it has one.
                 // Default to 0s.
@@ -438,7 +461,10 @@ impl OssuaryConnection {
             ConnectionState::Failed(_) |
             ConnectionState::Resetting(_) |
             ConnectionState::ClientRaiseUntrustedServer |
-            ConnectionState::ClientWaitServerApproval => {},
+            ConnectionState::ClientWaitServerApproval => {
+                self.reset_state(None);
+                return Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()));
+            },
 
             // Non-receive states.  Receiving handshake data is an error.
             ConnectionState::ClientSendHandshake |
@@ -449,9 +475,6 @@ impl OssuaryConnection {
                 return Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()));
             },
 
-            // <client> --> [session x25519 public key,
-            //               session nonce,
-            //               client random challenge]      --> <server>
             ConnectionState::ServerWaitHandshake(_) => {
                 match pkt.kind() {
                     PacketType::ClientHandshake => {
@@ -475,16 +498,15 @@ impl OssuaryConnection {
                 }
             },
 
-            // <client> <-- [session x25519 public key,
-            //               session nonce],
-            //              [[server x25519 public key,
-            //                server random challenge,
-            //                client challenge signature]] <-- <server>
             ConnectionState::ClientWaitHandshake(_t) => {
                 match pkt.kind() {
                     PacketType::ServerHandshake => {
-                        // TODO: handle error, reset state
-                        if let Ok(inner_pkt) = ServerHandshakePacket::from_packet(&pkt) {
+                        let packet = ServerHandshakePacket::from_packet(&pkt);
+                        if packet.is_err() { // TODO: refactor
+                            self.reset_state(None);
+                            return Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()));
+                        }
+                        if let Ok(inner_pkt) = packet {
                             self.add_remote_key(&inner_pkt.public_key, &inner_pkt.nonce);
                             let mut plaintext: [u8; SERVER_HANDSHAKE_SUBPACKET_LEN] = [0u8; SERVER_HANDSHAKE_SUBPACKET_LEN];
                             let session = match self.local_key.session {
@@ -576,13 +598,15 @@ impl OssuaryConnection {
                 }
             },
 
-            // <client> --> [[client x25519 public key,
-            //                server challenge signature]] --> <server>
             ConnectionState::ServerWaitAuthentication(_t) => {
                 match pkt.kind() {
                     PacketType::ClientAuthentication => {
-                        // TODO: handle error, reset state
-                        if let Ok(inner_pkt) = ClientAuthenticationPacket::from_packet(&pkt) {
+                        let packet = ClientAuthenticationPacket::from_packet(&pkt);
+                        if packet.is_err() { // TODO: refactor
+                            self.reset_state(None);
+                            return Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()));
+                        }
+                        if let Ok(inner_pkt) = packet {
                             let mut plaintext: [u8; CLIENT_AUTH_SUBPACKET_LEN] = [0u8; CLIENT_AUTH_SUBPACKET_LEN];
                             let session = match self.local_key.session {
                                 Some(ref s) => s.as_bytes(),
