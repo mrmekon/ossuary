@@ -188,6 +188,8 @@ impl OssuaryConnection {
         }
         let written = match self.state {
             // No-op states
+            ConnectionState::Failed(_) |
+            ConnectionState::ResetWait |
             ConnectionState::Encrypted |
             ConnectionState::ClientRaiseUntrustedServer |
             ConnectionState::ClientWaitServerApproval => {0},
@@ -203,6 +205,7 @@ impl OssuaryConnection {
                         let pkt: ResetPacket = Default::default();
                         w = write_packet(self, &mut buf, struct_as_slice(&pkt),
                                          PacketType::Reset)?;
+                        self.local_msg_id = 0;
                         self.reset_state(None);
                     }
                 }
@@ -332,11 +335,35 @@ impl OssuaryConnection {
                 w
             },
 
-            ConnectionState::Failed(ref _e) => {
-                // TODO: fail
-                unimplemented!();
+            ConnectionState::Failing(_) => {
+                // Tell remote host to disconnect
+                let pkt: ResetPacket = Default::default();
+                let w = write_packet(self, &mut buf, struct_as_slice(&pkt),
+                                         PacketType::Disconnect)?;
+                w
             },
+
+            ConnectionState::Resetting(initial) => {
+                // Tell remote host to reset
+                let pkt: ResetPacket = Default::default();
+                let w = write_packet(self, &mut buf, struct_as_slice(&pkt),
+                                     PacketType::Reset)?;
+                self.local_msg_id = 0;
+                self.state = match initial {
+                    true => ConnectionState::ResetWait,
+                    false => self.initial_state(),
+                };
+                w
+            }
         };
+
+        // Finalize failure state if failing
+        match self.state {
+            ConnectionState::Failing(ref e) => {
+                self.state = ConnectionState::Failed(e.clone());
+            },
+            _ => {},
+        }
         Ok(written)
     }
     pub fn recv_handshake<T,U>(&mut self, buf: T) -> Result<usize, OssuaryError>
@@ -351,7 +378,8 @@ impl OssuaryConnection {
                 // Wait for response, with timeout
                 if let Ok(dur) = t.elapsed() {
                     if dur.as_secs() > MAX_HANDSHAKE_WAIT_TIME {
-                        return Err(OssuaryError::ConnectionReset);
+                        self.reset_state(None);
+                        return Err(OssuaryError::ConnectionReset(0));
                     }
                 }
             },
@@ -364,15 +392,21 @@ impl OssuaryConnection {
                 return Err(OssuaryError::WouldBlock(b));
             }
             Err(e) => {
-                self.reset_state(None);
+                self.reset_state(Some(e.clone()));
                 return Err(e);
             }
         };
 
         match pkt.kind() {
             PacketType::Reset => {
-                self.reset_state(None);
-                return Err(OssuaryError::ConnectionReset);
+                match self.state {
+                    ConnectionState::ResetWait => {},
+                    _ => {
+                        self.reset_state(None);
+                        self.state = ConnectionState::Resetting(false);
+                        return Err(OssuaryError::ConnectionReset(bytes_read));
+                    },
+                }
             },
             PacketType::Disconnect => {
                 self.reset_state(Some(OssuaryError::ConnectionFailed));
@@ -382,15 +416,27 @@ impl OssuaryConnection {
         }
 
         if pkt.header.msg_id != self.remote_msg_id {
-            println!("Message gap detected.  Restarting connection.");
-            println!("Server: {}", self.is_server());
-            self.reset_state(None);
-            return Err(OssuaryError::InvalidPacket("Message ID does not match".into()));
+            match pkt.kind() {
+                PacketType::Reset => {},
+                _ => {
+                    match self.state {
+                        ConnectionState::ResetWait => {},
+                        _ => {
+                            println!("Message gap detected.  Restarting connection.");
+                            self.reset_state(None);
+                            return Err(OssuaryError::InvalidPacket("Message ID does not match".into()));
+                        },
+                    }
+                },
+            }
         }
         self.remote_msg_id = pkt.header.msg_id + 1;
 
         match self.state {
             // no-op states
+            ConnectionState::Failing(_) |
+            ConnectionState::Failed(_) |
+            ConnectionState::Resetting(_) |
             ConnectionState::ClientRaiseUntrustedServer |
             ConnectionState::ClientWaitServerApproval => {},
 
@@ -457,7 +503,13 @@ impl OssuaryConnection {
                             };
                             let mut pt: &mut [u8] = &mut plaintext;
                             // note: pt is consumed by decrypt_to_bytes
-                            let _ = decrypt_to_bytes(session, &nonce, &inner_pkt.subpacket, &mut pt)?;
+                            match decrypt_to_bytes(session, &nonce, &inner_pkt.subpacket, &mut pt) {
+                                Ok(_) => {},
+                                Err(e) => {
+                                    self.reset_state(None);
+                                    return Err(e);
+                                }
+                            }
                             if let Ok(enc_pkt) = ServerEncryptedHandshakePacket::from_bytes(&plaintext) {
                                 let mut chal: [u8; CHALLENGE_LEN] = [0u8; CHALLENGE_LEN];
                                 let mut sig: [u8; SIGNATURE_LEN] = [0u8; SIGNATURE_LEN];
@@ -548,7 +600,13 @@ impl OssuaryConnection {
                             };
                             let mut pt: &mut [u8] = &mut plaintext;
                             // note: pt is consumed by decrypt_to_bytes
-                            let _ = decrypt_to_bytes(session, &nonce, &inner_pkt.subpacket, &mut pt)?;
+                            match decrypt_to_bytes(session, &nonce, &inner_pkt.subpacket, &mut pt) {
+                                Ok(_) => {},
+                                Err(e) => {
+                                    self.reset_state(None);
+                                    return Err(e);
+                                }
+                            }
                             if let Ok(enc_pkt) = ClientEncryptedAuthenticationPacket::from_bytes(&plaintext) {
                                 let mut sig: [u8; SIGNATURE_LEN] = [0u8; SIGNATURE_LEN];
                                 sig.copy_from_slice(&enc_pkt.signature);
@@ -615,11 +673,18 @@ impl OssuaryConnection {
                 }
             },
 
-            ConnectionState::Failed(ref _e) => {
-                // TODO: fail
-                unimplemented!();
-            },
-
+            ConnectionState::ResetWait => {
+                match pkt.kind() {
+                    PacketType::Reset => {
+                        self.remote_msg_id = 0;
+                        self.state = match self.conn_type {
+                            ConnectionType::Client => ConnectionState::ClientSendHandshake,
+                            _ => ConnectionState::ServerWaitHandshake(std::time::SystemTime::now()),
+                        }
+                    },
+                    _ => {},
+                }
+            }
         };
         Ok(bytes_read)
     }
@@ -629,21 +694,9 @@ impl OssuaryConnection {
     ///
     ///
     pub fn handshake_done(&mut self) -> Result<bool, OssuaryError> {
-        let failed = match self.state {
-            ConnectionState::Failed(_) => true,
-            _ => false,
-        };
-        if failed {
-            let mut new_state = ConnectionState::Failed(OssuaryError::ConnectionFailed);
-            std::mem::swap(&mut self.state, &mut new_state);
-            match new_state {
-                ConnectionState::Failed(e) => return Err(e),
-                _ => return Err(OssuaryError::ConnectionFailed),
-            }
-        }
         match self.state {
             ConnectionState::Encrypted => Ok(true),
-            ConnectionState::Failed(ref _e) => Err(OssuaryError::ConnectionFailed),
+            ConnectionState::Failed(ref e) => Err(e.clone()),
             ConnectionState::ClientRaiseUntrustedServer => {
                 self.state = ConnectionState::ClientWaitServerApproval;
                 let mut key: Vec<u8> = Vec::new();

@@ -30,7 +30,7 @@ where T: std::ops::DerefMut<Target = U>,
     let packet_len = hdr.len as usize;
     if conn.read_buf_used < header_size + packet_len {
         if header_size + packet_len > PACKET_BUF_SIZE {
-            panic!("oversized packet");
+            return Err(OssuaryError::InvalidPacket("Oversized packet".into()));
         }
         return Err(OssuaryError::WouldBlock(bytes_read));
     }
@@ -183,16 +183,29 @@ impl OssuaryConnection {
             Ok((pkt, bytes)) => {
                 bytes_read += bytes;
                 if pkt.header.msg_id != self.remote_msg_id {
-                    let msg_id = pkt.header.msg_id;
-                    println!("Message gap detected.  Restarting connection. ({} != {})",
-                             msg_id, self.remote_msg_id);
-                    println!("Server: {}", self.is_server());
-                    self.reset_state(None);
-                    return Err(OssuaryError::InvalidPacket("Message ID mismatch".into()))
+                    match pkt.kind() {
+                        PacketType::Reset => {},
+                        _ => {
+                            let msg_id = pkt.header.msg_id;
+                            println!("Message gap detected.  Restarting connection. ({} != {})",
+                                     msg_id, self.remote_msg_id);
+                            self.reset_state(None);
+                            return Err(OssuaryError::InvalidPacket("Message ID mismatch".into()))
+                        },
+                    }
                 }
                 self.remote_msg_id = pkt.header.msg_id + 1;
 
                 match pkt.kind() {
+                    PacketType::Reset => {
+                        self.reset_state(None);
+                        self.state = ConnectionState::Resetting(false);
+                        return Err(OssuaryError::ConnectionReset(bytes_read));
+                    },
+                    PacketType::Disconnect => {
+                        self.reset_state(Some(OssuaryError::ConnectionFailed));
+                        return Err(OssuaryError::ConnectionFailed);
+                    },
                     PacketType::EncryptedData => {
                         match interpret_packet_extra::<EncryptedPacket>(&pkt) {
                             Ok((data_pkt, rest)) => {

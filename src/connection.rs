@@ -5,6 +5,21 @@ use rand::RngCore;
 use rand::rngs::OsRng;
 
 impl OssuaryConnection {
+    fn generate_session_material() -> Result<SessionKeyMaterial, OssuaryError> {
+        let mut rng = OsRng::new().expect("RNG not available.");
+        let sec_key = EphemeralSecret::new(&mut rng);
+        let pub_key = EphemeralPublic::from(&sec_key);
+        let mut nonce: [u8; NONCE_LEN] = [0; NONCE_LEN];
+        rng.fill_bytes(&mut nonce);
+
+        Ok(SessionKeyMaterial {
+            secret: Some(sec_key),
+            public: *pub_key.as_bytes(),
+            nonce: nonce,
+            session: None,
+        })
+    }
+
     /// Allocate a new OssuaryConnection.
     ///
     /// `conn_type` is a [`ConnectionType`] indicating whether this instance
@@ -14,22 +29,13 @@ impl OssuaryConnection {
     /// used for host authentication.  If `None` is provided, a keypair will
     /// be generated for the lifetime of this connection object.
     pub fn new(conn_type: ConnectionType, auth_secret_key: Option<&[u8]>) -> Result<OssuaryConnection, OssuaryError> {
-        //let mut rng = thread_rng();
         let mut rng = OsRng::new().expect("RNG not available.");
-        let sec_key = EphemeralSecret::new(&mut rng);
-        let pub_key = EphemeralPublic::from(&sec_key);
 
         let mut challenge: [u8; CHALLENGE_LEN] = [0; CHALLENGE_LEN];
-        let mut nonce: [u8; NONCE_LEN] = [0; NONCE_LEN];
         rng.fill_bytes(&mut challenge);
-        rng.fill_bytes(&mut nonce);
 
-        let key = SessionKeyMaterial {
-            secret: Some(sec_key),
-            public: *pub_key.as_bytes(),
-            nonce: nonce,
-            session: None,
-        };
+        let key = OssuaryConnection::generate_session_material()?;
+
         let (auth_sec, auth_pub) = match auth_secret_key {
             Some(s) => {
                 // Use the given secret key
@@ -73,6 +79,14 @@ impl OssuaryConnection {
         })
     }
 
+    /// Get the initial state machine state of this connection
+    pub(crate) fn initial_state(&self) -> ConnectionState {
+        match self.conn_type {
+            ConnectionType::Client => ConnectionState::ClientSendHandshake,
+            _ => ConnectionState::ServerWaitHandshake(std::time::SystemTime::now()),
+        }
+    }
+
     /// Reset the context back to its default state.
     ///
     /// If `permanent_err` is None, this connection can be re-established by
@@ -87,7 +101,7 @@ impl OssuaryConnection {
     /// connection, such as when the client's key is not authorized.
     ///
     pub(crate) fn reset_state(&mut self, permanent_err: Option<OssuaryError>) {
-        self.local_key = Default::default();
+        self.local_key = OssuaryConnection::generate_session_material().unwrap_or_default();
         self.remote_key = None;
         self.local_msg_id = 0;
         self.remote_msg_id = 0;
@@ -96,20 +110,18 @@ impl OssuaryConnection {
         self.read_buf_used = 0;
         self.write_buf = [0u8; PACKET_BUF_SIZE];
         self.write_buf_used = 0;
-        self.state = match permanent_err {
-            None => {
-                match self.conn_type {
-                    ConnectionType::Client => ConnectionState::ClientSendHandshake,
-                    _ => ConnectionState::ServerWaitHandshake(std::time::SystemTime::now()),
-                }
-            },
-            Some(e) => {
-                ConnectionState::Failed(e)
-            }
+        self.reset_count += 1;
+        let perm_error = match self.reset_count {
+            c if c < MAX_RESET_COUNT => permanent_err,
+            _ => Some(OssuaryError::ConnectionFailed),
+        };
+        self.state = match perm_error {
+            None => ConnectionState::Resetting(true),
+            Some(e) => ConnectionState::Failing(e),
         };
     }
     /// Whether this context represents a server (as opposed to a client).
-    pub(crate) fn is_server(&self) -> bool {
+    pub fn is_server(&self) -> bool {
         match self.conn_type {
             ConnectionType::Client => false,
             _ => true,

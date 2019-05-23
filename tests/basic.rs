@@ -26,7 +26,7 @@ where T: std::io::Read + std::io::Write {
                 match conn.recv_handshake(&mut stream) {
                     Ok(_) => break,
                     Err(OssuaryError::WouldBlock(_)) => {},
-                    _ => panic!("Handshake failed."),
+                    Err(e) => panic!("Handshake failed: {:?}", e),
                 }
             }
         }

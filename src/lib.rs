@@ -125,8 +125,6 @@
 //
 // TODO
 //  - consider all unexpected packet types to be errors
-//  - ensure that a reset on one end always sends a reset to the other
-//  - limit connection retries
 //  - tests should check their received strings
 //  - rustdoc everything
 //
@@ -154,6 +152,9 @@ const PROTOCOL_VERSION: u8 = 1u8;
 
 // Maximum time to wait (in seconds) for a handshake response
 const MAX_HANDSHAKE_WAIT_TIME: u64 = 3u64;
+
+// Maximum number of times a connection can reset before a permanent failure.
+const MAX_RESET_COUNT: usize = 5;
 
 // Size of the random data to be signed by client
 const CHALLENGE_LEN: usize = 32;
@@ -318,7 +319,34 @@ enum ConnectionState {
     /// Connection is established, encrypted, and optionally authenticated.
     Encrypted,
 
-    /// Connection has failed because of the associated error.
+    /// Connection has temporarily failed and will be reset
+    ///
+    /// An error occurred that might be recoverable.  A reset packet will be
+    /// sent to the remote host to inform it to reset as well.
+    ///
+    /// Parameter is true if this side is initiating the reset, false if this
+    /// side is responding to a received reset.
+    Resetting(bool),
+
+    /// Waiting for other side of connection to confirm reset
+    ///
+    /// The local host has sent a reset packet to the remote host, and is
+    /// waiting for the remote host to confirm that it has reset its state.
+    /// This is a temporary holding state to ensure that all packets that
+    /// were on the wire at the time of the error are received before a
+    /// new connection attempt is made.
+    ResetWait,
+
+    /// Connection has failed permanently because of the associated error
+    ///
+    /// The connection is known to have failed on the local side, but the
+    /// failure has not yet been communicated to the remote host.
+    Failing(OssuaryError),
+
+    /// Connection has failed permanently
+    ///
+    /// Both hosts are informed of the failure, and the connection will not be
+    /// recovered.
     Failed(OssuaryError),
 }
 
@@ -399,6 +427,7 @@ pub struct OssuaryConnection {
     read_buf_used: usize,
     write_buf: [u8; PACKET_BUF_SIZE],
     write_buf_used: usize,
+    reset_count: usize,
 }
 impl Default for OssuaryConnection {
     fn default() -> Self {
@@ -416,6 +445,7 @@ impl Default for OssuaryConnection {
             read_buf_used: 0,
             write_buf: [0u8; PACKET_BUF_SIZE],
             write_buf_used: 0,
+            reset_count: 0,
         }
     }
 }

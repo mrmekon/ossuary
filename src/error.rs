@@ -1,5 +1,6 @@
 use crate::*;
 
+#[derive(Clone, PartialEq)]
 /// Error produced by Ossuary or one of its dependencies
 pub enum OssuaryError {
     /// A problem with I/O read or writes.
@@ -7,7 +8,7 @@ pub enum OssuaryError {
     /// An Io error is most likely raised when using an input or output buffer
     /// that is more complex than a simple in-memory buffer, such as a
     /// [`std::net::TcpStream`]
-    Io(std::io::Error),
+    Io(String),
 
     /// A buffer cannot complete a read/write without blocking.
     ///
@@ -54,7 +55,7 @@ pub enum OssuaryError {
     ///
     /// This error likely indicates a sync or corruption error in the data
     /// stream, and will trigger a connection reset.
-    Unpack(core::array::TryFromSliceError),
+    Unpack(String),
 
     /// Error reading from random number generator
     NoRandomSource,
@@ -109,7 +110,7 @@ pub enum OssuaryError {
     /// fluke, such as momentary corruption or a sync error.  Reconnection with
     /// the same context may be possible.  This must be handled by returning to
     /// the handshake loop.
-    ConnectionReset,
+    ConnectionReset(usize),
 
     /// The connection has reset, and reconnection is not suggested.
     ///
@@ -131,10 +132,10 @@ impl std::fmt::Debug for OssuaryError {
             OssuaryError::NoRandomSource => write!(f, "OssuaryError::NoRandomSource"),
             OssuaryError::KeySize(_,_) => write!(f, "OssuaryError::KeySize"),
             OssuaryError::InvalidKey => write!(f, "OssuaryError::InvalidKey"),
-            OssuaryError::InvalidPacket(_) => write!(f, "OssuaryError::InvalidPacket"),
+            OssuaryError::InvalidPacket(m) => write!(f, "OssuaryError::InvalidPacket: {}", m),
             OssuaryError::InvalidStruct => write!(f, "OssuaryError::InvalidStruct"),
             OssuaryError::InvalidSignature => write!(f, "OssuaryError::InvalidSignature"),
-            OssuaryError::ConnectionReset => write!(f, "OssuaryError::ConnectionReset"),
+            OssuaryError::ConnectionReset(_) => write!(f, "OssuaryError::ConnectionReset"),
             OssuaryError::ConnectionFailed => write!(f, "OssuaryError::ConnectionFailed"),
             OssuaryError::UntrustedServer(_) => write!(f, "OssuaryError::UntrustedServer"),
             OssuaryError::DecryptionFailed => write!(f, "OssuaryError::DecryptionFailed"),
@@ -145,13 +146,13 @@ impl From<std::io::Error> for OssuaryError {
     fn from(error: std::io::Error) -> Self {
         match error.kind() {
             std::io::ErrorKind::WouldBlock => OssuaryError::WouldBlock(0),
-            _ => OssuaryError::Io(error),
+            _ => OssuaryError::Io(error.to_string()),
         }
     }
 }
 impl From<core::array::TryFromSliceError> for OssuaryError {
     fn from(error: core::array::TryFromSliceError) -> Self {
-        OssuaryError::Unpack(error)
+        OssuaryError::Unpack(error.to_string())
     }
 }
 impl From<ed25519_dalek::SignatureError> for OssuaryError {
