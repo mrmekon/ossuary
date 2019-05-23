@@ -141,7 +141,7 @@ extern crate rand;
 extern crate chacha20_poly1305_aead;
 
 use chacha20_poly1305_aead::{encrypt,decrypt};
-use x25519_dalek::{EphemeralSecret, EphemeralPublic, SharedSecret};
+use x25519_dalek::{EphemeralSecret, PublicKey as EphemeralPublic, SharedSecret};
 use ed25519_dalek::{Signature, Keypair, SecretKey, PublicKey};
 
 use rand::rngs::OsRng;
