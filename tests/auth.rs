@@ -120,7 +120,7 @@ fn auth_client_key_many_good() {
     connect(client_conn, server_conn, Some(ExpectedError::UntrustedServer), true);
 }
 #[test]
-#[should_panic]
+#[should_panic(expected = "InvalidKey")]
 fn auth_client_key_one_bad() {
     // Server requires authentication, client is invalid, expected failure
     let client_conn = OssuaryConnection::new(ConnectionType::Client, Some(CLIENT_SECRET.clone())).unwrap();
@@ -129,7 +129,7 @@ fn auth_client_key_one_bad() {
     connect(client_conn, server_conn, Some(ExpectedError::UntrustedServer), true);
 }
 #[test]
-#[should_panic]
+#[should_panic(expected = "InvalidKey")]
 fn auth_client_key_many_bad() {
     // Server requires authentication, client is invalid, expected failure
     let client_conn = OssuaryConnection::new(ConnectionType::Client, Some(CLIENT_SECRET.clone())).unwrap();
@@ -147,7 +147,7 @@ fn auth_server_key_good() {
     connect(client_conn, server_conn, None, false);
 }
 #[test]
-#[should_panic]
+#[should_panic(expected = "Untrusted server")]
 fn auth_server_key_bad() {
     // Client require authentication, expected failure
     let mut client_conn = OssuaryConnection::new(ConnectionType::Client, None).unwrap();
@@ -165,7 +165,7 @@ fn auth_client_server_keys_good() {
     connect(client_conn, server_conn, None, false);
 }
 #[test]
-#[should_panic]
+#[should_panic(expected = "Untrusted server")]
 fn auth_client_server_keys_bad() {
     // Server and client require authentication, expected failure
     let mut client_conn = OssuaryConnection::new(ConnectionType::Client, Some(CLIENT_SECRET.clone())).unwrap();
