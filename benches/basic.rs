@@ -1,3 +1,11 @@
+// basic.rs
+//
+// Benchmark test for Ossuary data throughput
+//
+// Benchmarks the time to transmit and receive large quantities of data over
+// an established Ossuary connection.  Data is transmitted over real TCP
+// sockets.
+//
 #![feature(test)]
 extern crate test;
 use test::Bencher;
