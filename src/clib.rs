@@ -190,23 +190,21 @@ pub extern "C" fn ossuary_send_data(conn: *mut OssuaryConnection,
 
 #[no_mangle]
 pub extern "C" fn ossuary_recv_data(conn: *mut OssuaryConnection,
-                                    in_buf: *mut u8, in_buf_len: *mut u16,
+                                    in_buf: *mut u8, in_buf_len: u16,
                                     out_buf: *mut u8, out_buf_len: *mut u16) -> i32 {
-    if conn.is_null() || in_buf.is_null() || out_buf.is_null() ||
-        in_buf_len.is_null() || out_buf_len.is_null() {
+    if conn.is_null() || in_buf.is_null() || out_buf.is_null() ||  out_buf_len.is_null() {
         return -1i32;
     }
     let conn = unsafe { &mut *conn };
     let r_out_buf: &mut [u8] = unsafe {
         std::slice::from_raw_parts_mut(out_buf, *out_buf_len as usize)
     };
-    let r_in_buf: &[u8] = unsafe { std::slice::from_raw_parts(in_buf, *in_buf_len as usize) };
+    let r_in_buf: &[u8] = unsafe { std::slice::from_raw_parts(in_buf, in_buf_len as usize) };
     let mut out_slice = r_out_buf;
     let mut in_slice = r_in_buf;
     let bytes_read = match conn.recv_data(&mut in_slice, &mut out_slice) {
         Ok((read,written)) => {
             unsafe {
-                *in_buf_len = read as u16;
                 *out_buf_len = written as u16;
             };
             read as i32

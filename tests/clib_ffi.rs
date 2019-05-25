@@ -78,10 +78,10 @@ fn server() -> Result<(), std::io::Error> {
         let in_buf = reader.fill_buf().unwrap();
         if in_buf.len() > 0 {
             let mut out_len = out_buf.len() as u16;
-            let mut in_len = in_buf.len() as u16;
+            let in_len = in_buf.len() as u16;
             let len = ossuary_recv_data(
                 conn,
-                (in_buf) as *const [u8] as *mut u8, &mut in_len,
+                (in_buf) as *const [u8] as *mut u8, in_len,
                 (&out_buf) as *const u8 as *mut u8, &mut out_len);
             if len != -1 {
                 println!("CLIB READ: {:?}",
@@ -157,10 +157,10 @@ fn client() -> Result<(), std::io::Error> {
             break;
         }
         let mut out_len = out_buf.len() as u16;
-        let mut in_len = in_buf.len() as u16;
+        let in_len = in_buf.len() as u16;
         let len = ossuary_recv_data(
             conn,
-            in_buf as *const [u8] as *mut u8, &mut in_len,
+            in_buf as *const [u8] as *mut u8, in_len,
             (&out_buf) as *const u8 as *mut u8, &mut out_len);
         if len == -1 {
             break;
