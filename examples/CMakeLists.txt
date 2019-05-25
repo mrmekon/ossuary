@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.12)
 project(ffi C)
 
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -flto -O3")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -flto -O0 -g")
 
 add_executable (ffi ffi.c)
 target_include_directories (ffi PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../ffi)
