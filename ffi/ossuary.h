@@ -34,7 +34,7 @@ int32_t ossuary_send_data(OssuaryConnection *conn,
                           uint8_t *in_buf, uint16_t in_buf_len,
                           uint8_t *out_buf, uint16_t *out_buf_len);
 int32_t ossuary_recv_data(OssuaryConnection *conn,
-                          uint8_t *in_buf, uint16_t in_buf_len,
+                          uint8_t *in_buf, uint16_t *in_buf_len,
                           uint8_t *out_buf, uint16_t *out_buf_len);
 
 #define _OSSUARY_H

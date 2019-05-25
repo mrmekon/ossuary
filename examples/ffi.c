@@ -90,7 +90,7 @@ int main(int argc, char **argv) {
 
   // Client receives decrypted data
   out_len = sizeof(client_buf);
-  bytes = ossuary_recv_data(client_conn, client_buf, bytes, client_buf, &out_len);
+  bytes = ossuary_recv_data(client_conn, client_buf, &bytes, client_buf, &out_len);
   printf("client recv data bytes: %d\n", bytes);
   printf("decrypted: %s\n", client_buf);
 
