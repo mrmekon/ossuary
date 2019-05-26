@@ -45,6 +45,7 @@ int main(int argc, char **argv) {
   int read_len;
   int client;
   int handshake;
+  int ossuary_res;
   uint16_t read_buf_len = 0;
   uint16_t write_buf_len = 0;
   uint16_t text_buf_len = 0;
@@ -53,11 +54,10 @@ int main(int argc, char **argv) {
   client = net_connect();
 
   // Create an Ossuary server
-  if ((server_conn = ossuary_create_connection(OSSUARY_CONN_TYPE_UNAUTHENTICATED_SERVER, NULL)) == NULL) {
+  if ((server_conn = ossuary_create_connection(OSSUARY_CONN_TYPE_UNAUTHENTICATED_SERVER, secret_key)) == NULL) {
     fprintf(stderr, "ERROR: could not create Ossuary connection\n");
     exit(1);
   }
-  ossuary_set_secret_key(server_conn, secret_key);
 
   while (1) {
     // Read from network socket
@@ -74,16 +74,20 @@ int main(int argc, char **argv) {
     if ((handshake = ossuary_handshake_done(server_conn)) == 0) {
       write_buf_len = sizeof(write_buf);
       // Check if we have any handshake packets to send
-      if (ossuary_send_handshake(server_conn, write_buf, &write_buf_len) < 0) {
-        fprintf(stderr, "ERROR: handshake send failed\n");
-        exit(1);
+      if ((ossuary_res = ossuary_send_handshake(server_conn, write_buf, &write_buf_len)) < 0) {
+        if (ossuary_res != OSSUARY_ERR_WOULDBLOCK) {
+          fprintf(stderr, "ERROR: handshake send failed\n");
+          exit(1);
+        }
       }
       // Check if we have any received handshake packets to parse
       if (read_buf_len > 0) {
         read_len = read_buf_len;
-        if (ossuary_recv_handshake(server_conn, read_buf, (uint16_t*)&read_len) < 0) {
-          fprintf(stderr, "ERROR: handshake recv failed\n");
-          exit(1);
+        if ((ossuary_res = ossuary_recv_handshake(server_conn, read_buf, (uint16_t*)&read_len)) < 0) {
+          if (ossuary_res != OSSUARY_ERR_WOULDBLOCK) {
+            fprintf(stderr, "ERROR: handshake recv failed\n");
+            exit(1);
+          }
         }
         // Consume bytes from read_buf
         memmove(read_buf, read_buf + read_len, read_buf_len - read_len);
@@ -97,15 +101,25 @@ int main(int argc, char **argv) {
     }
     // Ossuary data exchange over established connection
     else {
-      // If data has been received, decrypt and print it.
+      // If data has been received, decrypt it
       if (read_buf_len > 0) {
         text_buf_len = sizeof(text_buf);
-        if ((read_len = ossuary_recv_data(server_conn, read_buf, read_buf_len, text_buf, &text_buf_len)) > 0) {
+        read_len = read_buf_len;
+        if ((ossuary_res = ossuary_recv_data(server_conn, read_buf,
+                                             (uint16_t*)&read_len, text_buf, &text_buf_len)) < 0) {
+          if (ossuary_res != OSSUARY_ERR_WOULDBLOCK) {
+            fprintf(stderr, "ERROR: recv failed\n");
+            exit(1);
+          }
+        }
+        // Data can be consumed even if ossuary_recv_data() returned no data
+        if (read_len > 0) {
           memmove(read_buf, read_buf + read_len, read_buf_len - read_len);
           read_buf_len -= read_len;
-          if (text_buf_len > 0) {
-            printf("MSG: %s\n", text_buf);
-          }
+        }
+        // Print message if one was decrypted
+        if (text_buf_len > 0) {
+          printf("MSG: %s\n", text_buf);
         }
       }
     }

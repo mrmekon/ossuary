@@ -112,7 +112,10 @@ pub extern "C" fn ossuary_recv_handshake(conn: *mut OssuaryConnection,
             unsafe { *in_buf_len = b as u16; }
             OSSUARY_ERR_WOULD_BLOCK
         },
-        _ => -1i32,
+        _ => {
+            unsafe { *in_buf_len = 0u16; }
+            -1i32
+        },
     };
     ::std::mem::forget(conn);
     read as i32
@@ -137,7 +140,10 @@ pub extern "C" fn ossuary_send_handshake(conn: *mut OssuaryConnection,
             unsafe { *out_buf_len = w as u16 };
             OSSUARY_ERR_WOULD_BLOCK
         },
-        Err(_) => -1,
+        Err(_) => {
+            unsafe { *out_buf_len = 0u16 };
+            -1
+        },
     };
     ::std::mem::forget(conn);
     wrote
@@ -182,7 +188,10 @@ pub extern "C" fn ossuary_send_data(conn: *mut OssuaryConnection,
             unsafe { *out_buf_len = w as u16; }
             OSSUARY_ERR_WOULD_BLOCK
         },
-        Err(_) => -1i32,
+        Err(_) => {
+            unsafe { *out_buf_len = 0u16; }
+            -1i32
+        },
     };
     ::std::mem::forget(conn);
     bytes_written
@@ -211,13 +220,20 @@ pub extern "C" fn ossuary_recv_data(conn: *mut OssuaryConnection,
             };
             read as i32
         },
-        Err(OssuaryError::WouldBlock(w)) => {
+        Err(OssuaryError::WouldBlock(r)) => {
             unsafe {
-                *out_buf_len = w as u16;
+                *in_buf_len = r as u16;
+                *out_buf_len = 0u16;
             };
             OSSUARY_ERR_WOULD_BLOCK
         },
-        Err(_) => -1i32,
+        Err(_) => {
+            unsafe {
+                *in_buf_len = 0u16;
+                *out_buf_len = 0u16;
+            }
+            -1i32
+        },
     };
     ::std::mem::forget(conn);
     bytes_read as i32
