@@ -1,5 +1,3 @@
-use crate::*;
-
 #[derive(Clone, PartialEq)]
 /// Error produced by Ossuary or one of its dependencies
 pub enum OssuaryError {

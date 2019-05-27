@@ -2,6 +2,8 @@ use crate::*;
 
 use comm::{read_packet, write_packet, write_stored_packet};
 
+use std::io::Write;
+
 const CLIENT_HANDSHAKE_PACKET_LEN: usize = CHALLENGE_LEN + NONCE_LEN + KEY_LEN + 8;
 const CLIENT_AUTH_PACKET_LEN: usize = CLIENT_AUTH_SUBPACKET_LEN + 8;
 const SERVER_HANDSHAKE_PACKET_LEN: usize = NONCE_LEN + KEY_LEN + SERVER_HANDSHAKE_SUBPACKET_LEN + 8;
@@ -123,8 +125,7 @@ impl ServerHandshakePacket {
         enc_pkt.public_key.copy_from_slice(server_pubkey);
         enc_pkt.challenge.copy_from_slice(challenge);
         enc_pkt.signature.copy_from_slice(signature);
-        let mut subpkt: &mut [u8] = &mut pkt.subpacket;
-        encrypt_to_bytes(session_privkey, nonce, struct_as_slice(&enc_pkt), &mut subpkt)?;
+        encrypt_to_bytes(session_privkey, nonce, struct_as_slice(&enc_pkt), &mut pkt.subpacket)?;
         Ok(pkt)
     }
     fn from_packet(pkt: &NetworkPacket) -> Result<&ServerHandshakePacket, OssuaryError> {
@@ -188,8 +189,7 @@ impl ClientAuthenticationPacket {
         let mut enc_pkt: ClientEncryptedAuthenticationPacket = Default::default();
         enc_pkt.public_key.copy_from_slice(client_pubkey);
         enc_pkt.signature.copy_from_slice(signature);
-        let mut subpkt: &mut [u8] = &mut pkt.subpacket;
-        encrypt_to_bytes(session_privkey, nonce, struct_as_slice(&enc_pkt), &mut subpkt)?;
+        encrypt_to_bytes(session_privkey, nonce, struct_as_slice(&enc_pkt), &mut pkt.subpacket)?;
         Ok(pkt)
     }
     fn from_packet(pkt: &NetworkPacket) -> Result<&ClientAuthenticationPacket, OssuaryError> {
@@ -523,9 +523,8 @@ impl OssuaryConnection {
                                     return Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()));
                                 }
                             };
-                            let mut pt: &mut [u8] = &mut plaintext;
                             // note: pt is consumed by decrypt_to_bytes
-                            match decrypt_to_bytes(session, &nonce, &inner_pkt.subpacket, &mut pt) {
+                            match decrypt_to_bytes(session, &nonce, &inner_pkt.subpacket, &mut plaintext) {
                                 Ok(_) => {},
                                 Err(e) => {
                                     self.reset_state(None);
@@ -622,9 +621,8 @@ impl OssuaryConnection {
                                     return Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()));
                                 }
                             };
-                            let mut pt: &mut [u8] = &mut plaintext;
                             // note: pt is consumed by decrypt_to_bytes
-                            match decrypt_to_bytes(session, &nonce, &inner_pkt.subpacket, &mut pt) {
+                            match decrypt_to_bytes(session, &nonce, &inner_pkt.subpacket, &mut plaintext) {
                                 Ok(_) => {},
                                 Err(e) => {
                                     self.reset_state(None);
@@ -735,10 +733,8 @@ impl OssuaryConnection {
     }
 }
 
-fn encrypt_to_bytes<T,U>(session_key: &[u8], nonce: &[u8],
-                         data: &[u8], mut out: T) -> Result<usize, OssuaryError>
-where T: std::ops::DerefMut<Target = U>,
-      U: std::io::Write {
+fn encrypt_to_bytes(session_key: &[u8], nonce: &[u8],
+                    data: &[u8], mut out: &mut [u8]) -> Result<usize, OssuaryError> {
     let aad = [];
     let mut ciphertext = Vec::with_capacity(data.len());
     let tag = match encrypt(session_key,
@@ -762,10 +758,8 @@ where T: std::ops::DerefMut<Target = U>,
     Ok(size)
 }
 
-fn decrypt_to_bytes<T,U>(session_key: &[u8], nonce: &[u8],
-                         data: &[u8], mut out: T) -> Result<usize, OssuaryError>
-where T: std::ops::DerefMut<Target = U>,
-      U: std::io::Write {
+fn decrypt_to_bytes(session_key: &[u8], nonce: &[u8],
+                    data: &[u8], mut out: &mut [u8]) -> Result<usize, OssuaryError> {
     let s: &EncryptedPacket = slice_as_struct(data)?;
     if s.tag_len != 16 {
         return Err(OssuaryError::InvalidPacket("Invalid packet length".into()));
@@ -778,6 +772,6 @@ where T: std::ops::DerefMut<Target = U>,
     decrypt(session_key,
             &nonce,
             &aad, &ciphertext, &tag,
-            out.deref_mut())?;
+            &mut out)?;
     Ok(ciphertext.len())
 }

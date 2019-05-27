@@ -1,6 +1,5 @@
 use crate::*;
 
-//use rand::thread_rng;
 use rand::RngCore;
 use rand::rngs::OsRng;
 
@@ -27,7 +26,9 @@ impl OssuaryConnection {
     ///
     /// `auth_secret_key` is the secret portion of the long-term Ed25519 key
     /// used for host authentication.  If `None` is provided, a keypair will
-    /// be generated for the lifetime of this connection object.
+    /// be generated for the lifetime of this connection object.  This key
+    /// can be changed with [`OssuaryConnection::set_secret_key`].
+    ///
     pub fn new(conn_type: ConnectionType, auth_secret_key: Option<&[u8]>) -> Result<OssuaryConnection, OssuaryError> {
         let mut rng = OsRng::new().expect("RNG not available.");
 
@@ -199,7 +200,10 @@ impl OssuaryConnection {
         }
         Ok(count)
     }
-    /// Add authentication secret signing key
+    /// Set authentication secret signing key
+    ///
+    /// Changes the secret authentication key of this side of the connection,
+    /// which was previously set by [`OssuaryConnection::new`]
     ///
     /// `key` must be a `&[u8]` slice containing a valid 32-byte ed25519
     /// signing key.  Signing keys should be kept secret and should be stored

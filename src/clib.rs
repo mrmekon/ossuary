@@ -1,3 +1,5 @@
+//! Ossuary API exposed with a C FFI
+//!
 use crate::{OssuaryConnection, ConnectionType, OssuaryError, KEY_LEN, generate_auth_keypair};
 
 pub const OSSUARY_ERR_WOULD_BLOCK: i32 = -64;

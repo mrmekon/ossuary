@@ -135,11 +135,6 @@ mod error;
 
 pub use error::OssuaryError;
 
-extern crate x25519_dalek;
-extern crate ed25519_dalek;
-extern crate rand;
-extern crate chacha20_poly1305_aead;
-
 use chacha20_poly1305_aead::{encrypt,decrypt};
 use x25519_dalek::{EphemeralSecret, PublicKey as EphemeralPublic, SharedSecret};
 use ed25519_dalek::{Signature, Keypair, SecretKey, PublicKey};
