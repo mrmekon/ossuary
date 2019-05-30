@@ -145,6 +145,15 @@ pub enum OssuaryError {
     /// When one side fails, it attempts to trigger a failure on the other side
     /// as well.
     ConnectionFailed,
+
+    /// The connection has been closed by request.
+    ///
+    /// This indicates that the connection has been permanently closed by
+    /// the local side's request, and not because of an error.  A call to
+    /// [`disconnect`] triggers this.
+    ///
+    /// [`disconnect`]: crate::OssuaryConnection::disconnect
+    ConnectionClosed,
 }
 impl std::fmt::Debug for OssuaryError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -160,6 +169,7 @@ impl std::fmt::Debug for OssuaryError {
             OssuaryError::InvalidSignature => write!(f, "OssuaryError::InvalidSignature"),
             OssuaryError::ConnectionReset(_) => write!(f, "OssuaryError::ConnectionReset"),
             OssuaryError::ConnectionFailed => write!(f, "OssuaryError::ConnectionFailed"),
+            OssuaryError::ConnectionClosed => write!(f, "OssuaryError::ConnectionClosed"),
             OssuaryError::UntrustedServer(_) => write!(f, "OssuaryError::UntrustedServer"),
             OssuaryError::DecryptionFailed => write!(f, "OssuaryError::DecryptionFailed"),
             OssuaryError::WrongProtocolVersion(r,l) => write!(f, "OssuaryError:WrongProtocolVersion {} != {}", r, l),

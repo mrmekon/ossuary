@@ -14,6 +14,7 @@
 // limitations under the License.
 //
 use crate::*;
+use crate::handshake::ResetPacket;
 
 use std::convert::TryInto;
 
@@ -187,6 +188,7 @@ impl OssuaryConnection {
         let bytes_written: usize;
         let mut bytes_read: usize = 0;
         match self.state {
+            ConnectionState::Failed(_) => { return Ok((0,0)); }
             ConnectionState::Encrypted => {},
             _ => {
                 return Err(OssuaryError::InvalidPacket(
@@ -199,6 +201,7 @@ impl OssuaryConnection {
                 bytes_read += bytes;
                 if pkt.header.msg_id != self.remote_msg_id {
                     match pkt.kind() {
+                        PacketType::Disconnect |
                         PacketType::Reset => {},
                         _ => {
                             let msg_id = pkt.header.msg_id;
@@ -218,8 +221,17 @@ impl OssuaryConnection {
                         return Err(OssuaryError::ConnectionReset(bytes_read));
                     },
                     PacketType::Disconnect => {
-                        self.reset_state(Some(OssuaryError::ConnectionFailed));
-                        return Err(OssuaryError::ConnectionFailed);
+                        let rs_pkt = interpret_packet::<ResetPacket>(&pkt)?;
+                        match rs_pkt.error {
+                            true => {
+                                self.reset_state(Some(OssuaryError::ConnectionFailed));
+                                return Err(OssuaryError::ConnectionFailed);
+                            },
+                            false => {
+                                self.reset_state(Some(OssuaryError::ConnectionClosed));
+                                return Err(OssuaryError::ConnectionClosed);
+                            },
+                        }
                     },
                     PacketType::EncryptedData => {
                         match interpret_packet_extra::<EncryptedPacket>(&pkt) {

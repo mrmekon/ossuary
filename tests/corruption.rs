@@ -100,7 +100,17 @@ fn corruption() {
                         false => panic!("Unexpected connection failure."),
                     }
                 }
-                Err(e) => panic!("Handshake failed with error: {:?}", e),
+                Err(e) => match e {
+                    ref e if e == &corruption.4 => {}, // expected error
+                    OssuaryError::ConnectionFailed => {
+                        match corruption.5 {
+                            true => break,
+                            false => panic!("Unexpected connection failure."),
+                        }
+                    },
+                    OssuaryError::ConnectionReset(b) => { recv_buf.drain(0..b); },
+                    _ => panic!("Handshake failed: {:?}", e),
+                },
             }
             match recv_conn.handshake_done() {
                 Ok(true) => done += 1,
@@ -111,7 +121,17 @@ fn corruption() {
                         false => panic!("Unexpected connection failure."),
                     }
                 }
-                Err(e) => panic!("Handshake failed with error: {:?}", e),
+                Err(e) => match e {
+                    ref e if e == &corruption.4 => {}, // expected error
+                    OssuaryError::ConnectionFailed => {
+                        match corruption.5 {
+                            true => break,
+                            false => panic!("Unexpected connection failure."),
+                        }
+                    },
+                    OssuaryError::ConnectionReset(b) => { recv_buf.drain(0..b); },
+                    _ => panic!("Handshake failed: {:?}", e),
+                },
             }
             if done == 2 {
                 break;
@@ -160,7 +180,18 @@ fn corruption() {
                         },
                     }
                 },
-                Err(e) => panic!("ERROR: {:?}", e),
+                //Err(e) => panic!("ERROR: {:?}", e),
+                Err(e) => match e {
+                    ref e if e == &corruption.4 => {}, // expected error
+                    OssuaryError::ConnectionFailed => {
+                        match corruption.5 {
+                            true => break,
+                            false => panic!("Unexpected connection failure."),
+                        }
+                    },
+                    OssuaryError::ConnectionReset(b) => { recv_buf.drain(0..b); },
+                    _ => panic!("Handshake failed: {:?}", e),
+                },
                 _ => {},
             }
             loop_conn = match loop_conn {

@@ -28,15 +28,26 @@ const CLIENT_AUTH_SUBPACKET_LEN: usize = ::std::mem::size_of::<ClientEncryptedAu
     ::std::mem::size_of::<EncryptedPacket>() + TAG_LEN;
 
 #[repr(C,packed)]
-struct ResetPacket {
+pub(crate) struct ResetPacket {
     len: u16,
-    _reserved: u16,
+    pub(crate) error: bool,
+    _reserved: u8,
 }
 impl Default for ResetPacket {
     fn default() -> ResetPacket {
         ResetPacket {
             len: ::std::mem::size_of::<ResetPacket> as u16,
-            _reserved: 0u16,
+            error: true,
+            _reserved: 0u8,
+        }
+    }
+}
+impl ResetPacket {
+    fn closed() -> ResetPacket {
+        ResetPacket {
+            len: ::std::mem::size_of::<ResetPacket> as u16,
+            error: false,
+            _reserved: 0u8,
         }
     }
 }
@@ -373,11 +384,14 @@ impl OssuaryConnection {
                 w
             },
 
-            ConnectionState::Failing(_) => {
+            ConnectionState::Failing(ref e) => {
                 // Tell remote host to disconnect
-                let pkt: ResetPacket = Default::default();
+                let pkt: ResetPacket = match e {
+                    OssuaryError::ConnectionClosed => ResetPacket::closed(),
+                    _ => Default::default(),
+                };
                 let w = write_packet(self, &mut buf, struct_as_slice(&pkt),
-                                         PacketType::Disconnect)?;
+                                     PacketType::Disconnect)?;
                 w
             },
 
@@ -408,6 +422,7 @@ impl OssuaryConnection {
     where T: std::ops::DerefMut<Target = U>,
           U: std::io::Read {
         match self.state {
+            ConnectionState::Failed(_) |
             ConnectionState::Encrypted => return Ok(0),
             // Timeout wait states
             ConnectionState::ServerWaitHandshake(t) |
@@ -447,14 +462,24 @@ impl OssuaryConnection {
                 }
             },
             PacketType::Disconnect => {
-                self.reset_state(Some(OssuaryError::ConnectionFailed));
-                return Err(OssuaryError::ConnectionFailed);
+                let rs_pkt = interpret_packet::<ResetPacket>(&pkt)?;
+                match rs_pkt.error {
+                    true => {
+                        self.reset_state(Some(OssuaryError::ConnectionFailed));
+                        return Err(OssuaryError::ConnectionFailed);
+                    },
+                    false => {
+                        self.reset_state(Some(OssuaryError::ConnectionClosed));
+                        return Err(OssuaryError::ConnectionClosed);
+                    },
+                }
             },
             _ => {},
         }
 
         if pkt.header.msg_id != self.remote_msg_id {
             match pkt.kind() {
+                PacketType::Disconnect |
                 PacketType::Reset => {},
                 _ => {
                     match self.state {
@@ -729,6 +754,16 @@ impl OssuaryConnection {
 
     /// Returns whether the handshake process is complete.
     ///
+    /// Returns an error if the connection has failed, and specifically raises
+    /// [`OssuaryError::UntrustedServer`] if the handshake has stalled because
+    /// the remote host sent an authentication key that is not trusted.
+    ///
+    /// In the event of an untrusted server, calling
+    /// [`OssuaryConnection::add_authorized_key`] will mark the key as trusted
+    /// and allow the handshake to continue.  This should only be done if the
+    /// application is implementing a Trust-On-First-Use policy, and has
+    /// verified that the remote host's key has never been seen before.  It is
+    /// always best practice to prompt the user in this case before continuing.
     ///
     pub fn handshake_done(&mut self) -> Result<bool, OssuaryError> {
         match self.state {

@@ -94,6 +94,31 @@ impl OssuaryConnection {
         })
     }
 
+    /// Terminate a connection, or an on-going connection attempt.
+    ///
+    /// Calling this immediately closes the local end of Ossuary's connection,
+    /// and queues a disconnect packet to be sent to the remote host to inform
+    /// it to close its end.
+    ///
+    /// After calling disconnect(), the application should continue calling
+    /// Ossuary's functions (or at least its handshake functions) in a loop
+    /// until [`OssuaryConnection::handshake_done`] returns the matching error.
+    /// This allows Ossuary to generate the final disconnect packet.
+    ///
+    /// The handshake will return [`OssuaryError::ConnectionFailed`] if 'error'
+    /// is true, or [`OssuaryError::ConnectionClosed`] otherwise.
+    ///
+    /// 'error' - Indicates the reason for termination.  True means the channel
+    ///           is being closed because of some error, False means it is being
+    ///           closed due to completion or a clean shutdown.
+    ///
+    pub fn disconnect(&mut self, error: bool) {
+        match error {
+            true => self.reset_state(Some(OssuaryError::ConnectionFailed)),
+            false => self.reset_state(Some(OssuaryError::ConnectionClosed)),
+        }
+    }
+
     /// Get the initial state machine state of this connection
     pub(crate) fn initial_state(&self) -> ConnectionState {
         match self.conn_type {
