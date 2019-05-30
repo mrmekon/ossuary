@@ -1,3 +1,18 @@
+//
+// Copyright 2019 Trevor Bentley
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
 #[derive(Clone, PartialEq)]
 /// Error produced by Ossuary or one of its dependencies
 pub enum OssuaryError {
@@ -40,13 +55,15 @@ pub enum OssuaryError {
     /// This error contains the public key of the remote server.
     ///
     /// After this is returned, the handshake process is paused until the caller
-    /// verifies that the key is to be trusted by calling
-    /// [`OssuaryConnection::add_authorized_keys`]] with the returned public
-    /// key.  This should only be done if the user has opted for a TOFU policy,
-    /// and this is the first time connecting to this remote host.
+    /// verifies that the key is to be trusted by calling [`add_authorized_keys`]
+    /// with the returned public key.  This should only be done if the user has
+    /// opted for a TOFU policy, and this is the first time connecting to this
+    /// remote host.
     ///
     /// It is the caller's responsibility to save a database of (host, key)
     /// pairs when implementing TOFU.
+    ///
+    /// [`add_authorized_keys`]: crate::OssuaryConnection::add_authorized_keys
     UntrustedServer(Vec<u8>), // bytes consumed, public key
 
     /// Error casting received bytes to a primitive type.
@@ -61,8 +78,11 @@ pub enum OssuaryError {
     /// An invalid sized encryption key was encountered.
     ///
     /// This error is most likely caused by an attempt to register an invalid
-    /// secret or public key in [`OssuaryConnection::add_authorized_keys`] or
-    /// [`OssuaryConnection::set_secret_key`].  Both should be 32 bytes.
+    /// secret or public key in [`add_authorized_keys`] or [`set_secret_key`].
+    /// Both should be 32 bytes.
+    ///
+    /// [`add_authorized_keys`]: crate::OssuaryConnection::add_authorized_keys
+    /// [`set_secret_key`]: crate::OssuaryConnection::set_secret_key
     KeySize(usize, usize), // (expected, actual)
 
     /// An error occurred when parsing or using an encryption key.
