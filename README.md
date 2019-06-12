@@ -69,6 +69,10 @@ Should be presumed to be: none.  Don't assume immature cryptographic libraries f
 
 [Ossuary Rustdoc](https://mrmekon.github.io/ossuary/ossuary/)
 
+# Versioning
+
+This is an experimental pre-1.0 release.  The version numbers mean nothing, the API is unstable.
+
 # Dependencies
 
 The underlying cryptographic primitives are from third parties:
