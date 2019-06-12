@@ -78,7 +78,7 @@ This is an experimental pre-1.0 release.  The version numbers mean nothing, the 
 
 Requires Rust nightly:
 ```
-$ rustup default nightly
+$ rustup override set nightly
 ```
 
 Build everything and test (requires xargo):
