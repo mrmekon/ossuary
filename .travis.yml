@@ -1,0 +1,18 @@
+sudo: required
+language: rust
+rust:
+  - nightly
+os:
+ - osx
+ - linux
+matrix:
+  allow_failures:
+    - rust: nightly
+# Only build direct changes to master branch.  PRs still built.
+branches:
+  only:
+    - "master"
+osx_image: xcode8.3
+install:
+- curl https://static.rust-lang.org/rustup.sh |
+    sh -s -- --prefix=$HOME/rust
