@@ -8,6 +8,7 @@ categories = ["cryptography","network-programming"]
 homepage = "https://github.com/mrmekon/ossuary"
 repository = "https://github.com/mrmekon/ossuary"
 documentation = "https://mrmekon.github.io/ossuary/ossuary/"
+readme = "README.md"
 license = "Apache-2.0"
 edition = "2018"
 
