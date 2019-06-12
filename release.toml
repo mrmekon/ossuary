@@ -1,0 +1,7 @@
+sign-commit = false
+upload-doc = true
+pre-release-commit-message = "Release Ossuary {{version}}"
+dev-version-ext = "rc"
+tag-message = "Release Ossuary {{version}}"
+doc-commit-message = "Release Ossuary {{version}}"
+tag-prefix = "{{crate_name}}-"
