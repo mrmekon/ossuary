@@ -1,5 +1,4 @@
 #!/bin/bash
-set -e
 
 case `uname` in
     "Linux")
@@ -20,10 +19,22 @@ case `uname` in
 	;;
 esac
 
+command -v xargo > /dev/null
+if [[ $? -ne 0 ]]; then
+    echo "xargo required."
+    echo "run:"
+    echo "  $ cargo install xargo"
+    echo "  $ rustup component add rust-src"
+    exit 1
+fi
+
+set -e
+
 cargo test
 cargo bench -- --nocapture
 cargo build
 cargo build --examples
+cargo build --release
 cargo build --release --examples
 xargo build --target $XARGO_TARGET --release
 strip $STRIP_ARGS "target/release/libossuary.$LIB_EXT"
