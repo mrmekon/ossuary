@@ -33,10 +33,11 @@ set -e
 cargo test
 cargo bench -- --nocapture
 cargo build
-cargo build --examples
 cargo build --release
+cargo build --examples
 cargo build --release --examples
 xargo build --target $XARGO_TARGET --release
+cargo doc --release
 strip $STRIP_ARGS "target/release/libossuary.$LIB_EXT"
 strip $STRIP_ARGS "target/$XARGO_TARGET/release/libossuary.$LIB_EXT"
 mkdir -p examples/build/
