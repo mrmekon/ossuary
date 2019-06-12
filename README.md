@@ -74,6 +74,56 @@ Should be presumed to be: none.  Don't assume immature cryptographic libraries f
 
 This is an experimental pre-1.0 release.  The version numbers mean nothing, the API is unstable.
 
+# Building
+
+Requires Rust nightly:
+```
+$ rustup default nightly
+```
+
+Build everything and test (requires xargo):
+```
+$ ./build_all_and_test.sh
+```
+
+Build:
+```
+$ cargo build
+$ cargo build --release
+```
+
+Test:
+```
+$ cargo test
+```
+
+Benchmark:
+```
+$ cargo bench -- --nocapture
+```
+
+Rust examples:
+```
+$ cargo build --examples
+$ ./target/debug/examples/example
+```
+
+C examples (requires cmake):
+```
+$ mkdir -p examples/build/
+$ cd examples/build/
+$ cmake .. && make
+$ ./ffi
+[terminal 1] $ ./server
+[terminal 2] $ ./client
+```
+
+Documentation:
+```
+$ cargo doc
+$ open target/doc/ossuary/index.html
+```
+
 # Dependencies
 
 The underlying cryptographic primitives are from third parties:
