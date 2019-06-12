@@ -1,6 +1,6 @@
 [package]
 name = "ossuary"
-version = "0.5.1"
+version = "0.5.2-rc"
 authors = ["Trevor Bentley <trevor@trevorbentley.com>"]
 description = "Library for establishing secure communication channels between two hosts."
 keywords = ["communication", "cryptography", "security", "network"]
