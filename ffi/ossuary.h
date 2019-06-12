@@ -265,5 +265,14 @@ int32_t ossuary_recv_data(OssuaryConnection *conn,
                           uint8_t *in_buf, uint16_t *in_buf_len,
                           uint8_t *out_buf, uint16_t *out_buf_len);
 
+// Flush unsent data from a previous call to ossuary_send_data()
+//
+// If ossuary_send_data() is only able to send a partial packet, indicated by
+// the error code OSSUARY_ERR_WOULDBLOCK, the rest of the packet is held
+// internally in a cache.  Calling this function flushes the cache to the
+// output buffer, which should then be written to the network.  Continue calling
+// this function until it returns 0.
+int32_t ossuary_flush(OssuaryConnection *conn,
+                      uint8_t *out_buf, uint16_t out_buf_len);
 #define _OSSUARY_H
 #endif
