@@ -1,4 +1,5 @@
 # Ossuary (libossuary)
+[![Build Status](https://travis-ci.org/mrmekon/ossuary.svg?branch=master)](https://travis-ci.org/mrmekon/ossuary)
 
 Ossuary is a library for establishing an encrypted and authenticated communication channel between a client and a server.
 
