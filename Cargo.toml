@@ -22,7 +22,7 @@ lto = true
 debug-assertions = false
 codegen-units = 1
 panic = 'abort' #'unwind'
-incremental = true
+incremental = false
 overflow-checks = false
 
 [dependencies]
