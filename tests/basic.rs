@@ -60,6 +60,7 @@ where T: std::io::Read + std::io::Write {
             _ => {},
         }
     }
+    conn.disconnect(false);
 
     Ok(())
 }
