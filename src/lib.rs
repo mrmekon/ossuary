@@ -1,14 +1,17 @@
 #![doc(html_no_source)]
 //! # Ossuary
 //!
-//! Ossuary is a library for establishing an encrypted and authenticated
-//! communication channel between a client and a server.
+//! Ossuary is a Rust library for establishing an encrypted and
+//! authenticated communication channel between a client and a server.
 //!
 //! It establishes a 1-to-1 client/server communication channel that requires
 //! reliable, in-order packet delivery, such as provided by TCP sockets.
 //!
 //! Authentication and verification of remote hosts is optional, and requires
 //! an out-of-band exchange of host public keys, or a Trust-On-First-Use policy.
+//!
+//! Ossuary includes a C FFI API, and can be built as a native dynamic or static
+//! library for linking into C or C++ binaries.
 //!
 //! ## Protocol Overview:
 //!
@@ -509,6 +512,19 @@ pub enum ConnectionType {
 /// transmitted data.  This means they are not particularly small objects, but
 /// in exchange they can read and write from/to streams set in non-blocking mode
 /// without blocking single-threaded applications.
+///
+/// Establishing a connection involves calling
+/// [`OssuaryConnection::send_handshake`] and
+/// [`OssuaryConnection::recv_handshake`] in a loop until
+/// [`OssuaryConnection::handshake_done`] returns true.
+///
+/// Once established, data to encrypt and send is passed to
+/// [`OssuaryConnection::send_data`] and received data to decrypt is
+/// passed to [`OssuaryConnection::recv_data`].
+///
+/// Your program should be structured so that any failures during
+/// transmission cause it to fall back to the handshake loop to
+/// attempt a reconnection.
 ///
 pub struct OssuaryConnection {
     state: ConnectionState,

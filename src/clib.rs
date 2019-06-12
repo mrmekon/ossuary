@@ -1,5 +1,6 @@
 //! Ossuary API exposed with a C FFI
 //!
+//! See `ossuary.h` for documentation.
 //
 // Copyright 2019 Trevor Bentley
 //

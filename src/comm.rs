@@ -128,6 +128,28 @@ where T: std::ops::DerefMut<Target = U>,
 }
 
 impl OssuaryConnection {
+    /// Encrypts data into a packet suitable for sending over the network
+    ///
+    /// The caller provides unencrypted plaintext data, in any format, in the
+    /// `in_buf` buffer.  `send_data()` encrypts it and writes it in the proper
+    /// packet format into `out_buf`.
+    ///
+    /// This is the core function for data transmission via ossuary.  All data
+    /// to be sent over an Ossuary connection should pass through this function.
+    ///
+    /// Note that Ossuary does not perform network operations itself.  It is the
+    /// caller's responsibility to put the written data on the wire.  However,
+    /// you may pass a 'buf' that does this automatically, such as a TcpStream.
+    ///
+    /// Returns the number of bytes written to `out_buf`, or an error.
+    ///
+    /// You must handle [`OssuaryError::WouldBlock`], which is a recoverable
+    /// error, but indicates that some bytes were written to the buffer.  If any
+    /// bytes are written to `out_buf`, it can be assumed that all of `in_buf`
+    /// was consumed.  In the event of a `WouldBlock` error, you can either
+    /// continue calling `send_data()` with the next data to be sent, or you can
+    /// use [`OssuaryConnection::flush()`] to explicitly finish writing the
+    /// packet.
     pub fn send_data<T,U>(&mut self,
                           in_buf: &[u8],
                           mut out_buf: T) -> Result<usize, OssuaryError>
@@ -178,6 +200,20 @@ impl OssuaryConnection {
         Ok(written)
     }
 
+    /// Decrypts data from a packet received from a remote host
+    ///
+    /// The caller provides encrypted data from a remote host in the `in_buf`
+    /// buffer.  `recv_data()` decrypts it and writes the plaintext result into
+    /// `out_buf`.
+    ///
+    /// This is the core function for data transmission via ossuary.  All data
+    /// received over an Ossuary connection should pass through this function.
+    ///
+    /// Returns the number of bytes written to `out_buf`, or an error.
+    ///
+    /// You must handle [`OssuaryError::WouldBlock`], which is a recoverable
+    /// error, but indicates that some bytes were read from `in_buf`.  This
+    /// indicates that an incomplete packet was received.
     pub fn recv_data<T,U,R,V>(&mut self,
                               in_buf: T,
                               mut out_buf: R) -> Result<(usize, usize), OssuaryError>
@@ -286,6 +322,15 @@ impl OssuaryConnection {
         Ok((bytes_read, bytes_written))
     }
 
+    /// Write any cached encrypted data waiting to be sent
+    ///
+    /// If a previous call to [`OssuaryConnection::send_data`] was unable to
+    /// write out all of its data, the remaining data is cached internally.  It
+    /// can be explicitly flushed by calling this function until it returns 0.
+    ///
+    /// After each call, it is the caller's responsibility to put the written
+    /// data onto the network, unless `out_buf` is an object that handles that
+    /// implicitly, such as a TcpStream.
     pub fn flush<R,V>(&mut self,
                       mut out_buf: R) -> Result<usize, OssuaryError>
     where R: std::ops::DerefMut<Target = V>,

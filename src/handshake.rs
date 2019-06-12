@@ -236,6 +236,24 @@ impl ClientAuthenticationPacket {
 }
 
 impl OssuaryConnection {
+    /// Write the next handshake packet into the given buffer
+    ///
+    /// If a handshake packet is ready to be sent, this function writes the
+    /// encrypted packet into the provided buffer.
+    ///
+    /// This is a critical part of the handshaking stage, when a connection to
+    /// a remote host is securely established.  Each side of the connection must
+    /// call send_handshake() continuously, and any data that is written to the
+    /// data buffer must be sent to the remote host.  This should be done until
+    /// [`OssuaryConnection::handshake_done()`] returns true.
+    ///
+    /// Note that Ossuary does not perform network operations itself.  It is the
+    /// caller's responsibility to put the written data on the wire.  However,
+    /// you may pass a 'buf' that does this automatically, such as a TcpStream.
+    ///
+    /// Returns the number of bytes written into `buf`, or an error.  You must
+    /// handle [`OssuaryError::WouldBlock`], which is a recoverable error, but
+    /// indicates that some bytes were written to the buffer.
     pub fn send_handshake<T,U>(&mut self, mut buf: T) -> Result<usize, OssuaryError>
     where T: std::ops::DerefMut<Target = U>,
           U: std::io::Write {
@@ -418,6 +436,23 @@ impl OssuaryConnection {
         }
         Ok(written)
     }
+
+    /// Read the next handshake packet from the given buffer
+    ///
+    /// If a handshake packet has been received, this function reads and parses
+    /// the encrypted packet from the provided buffer and updates its internal
+    /// connection state.
+    ///
+    /// This is a critical part of the handshaking stage, when a connection to
+    /// a remote host is securely established.  Each side of the connection must
+    /// call recv_handshake() whenever data is received from the network until
+    /// [`OssuaryConnection::handshake_done()`] returns true.
+    ///
+    /// Returns the number of bytes read from `buf`, or an error.  It is the
+    /// caller's responsibility to ensure that the consumed bytes are removed
+    /// from the data buffer before it is used again.  You must handle
+    /// [`OssuaryError::WouldBlock`], which is a recoverable error, but
+    /// indicates that some bytes were also read from the buffer.
     pub fn recv_handshake<T,U>(&mut self, buf: T) -> Result<usize, OssuaryError>
     where T: std::ops::DerefMut<Target = U>,
           U: std::io::Read {

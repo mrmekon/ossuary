@@ -15,6 +15,13 @@
 //
 #[derive(Clone, PartialEq)]
 /// Error produced by Ossuary or one of its dependencies
+///
+/// The most important errors that all programs must explicitly consider are:
+/// - [`OssuaryError::UntrustedServer`]
+/// - [`OssuaryError::WouldBlock`]
+/// - [`OssuaryError::ConnectionReset`]
+/// - [`OssuaryError::ConnectionFailed`]
+/// - [`OssuaryError::ConnectionClosed`]
 pub enum OssuaryError {
     /// A problem with I/O read or writes.
     ///
@@ -133,6 +140,9 @@ pub enum OssuaryError {
     /// fluke, such as momentary corruption or a sync error.  Reconnection with
     /// the same context may be possible.  This must be handled by returning to
     /// the handshake loop.
+    ///
+    /// Includes the number of bytes consumed from the input buffer, if any,
+    /// at the time of the reset.
     ConnectionReset(usize),
 
     /// The connection has reset, and reconnection is not suggested.
