@@ -110,7 +110,7 @@ pub enum OssuaryError {
     /// The associated string may describe the problem that went wrong.  This
     /// might be encountered if packets are duplicated, dropped, or corrupted.
     /// It typically indicates an internal error, and the connection will reset.
-    InvalidPacket(String),
+    InvalidPacket(&'static str),
 
     /// Error casting a received packet to an internal struct format.
     ///

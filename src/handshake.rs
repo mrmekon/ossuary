@@ -493,7 +493,7 @@ impl OssuaryConnection {
                         self.reset_state(None);
                         self.state = ConnectionState::Resetting(false);
                         return Err(OssuaryError::ConnectionReset(bytes_read));
-                    },
+                    }
                 }
             },
             PacketType::Disconnect => {
@@ -520,7 +520,7 @@ impl OssuaryConnection {
                     match self.state {
                         ConnectionState::ResetWait => {},
                         _ => {
-                            println!("Message gap detected.  Restarting connection.");
+                            dbg!("Message gap detected.  Restarting connection.");
                             self.reset_state(None);
                             return Err(OssuaryError::InvalidPacket("Message ID does not match".into()));
                         },
@@ -530,15 +530,14 @@ impl OssuaryConnection {
         }
         self.remote_msg_id = pkt.header.msg_id + 1;
 
-        match self.state {
+        let res: Result<ConnectionState, OssuaryError> = match self.state {
             // no-op states
             ConnectionState::Failing(_) |
             ConnectionState::Failed(_) |
             ConnectionState::Resetting(_) |
             ConnectionState::ClientRaiseUntrustedServer |
             ConnectionState::ClientWaitServerApproval => {
-                self.reset_state(None);
-                return Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()));
+                Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()))
             },
 
             // Non-receive states.  Receiving handshake data is an error.
@@ -546,243 +545,43 @@ impl OssuaryConnection {
             ConnectionState::ClientSendAuthentication |
             ConnectionState::ServerSendHandshake |
             ConnectionState::Encrypted => {
-                self.reset_state(None);
-                return Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()));
+                Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()))
             },
 
             ConnectionState::ServerWaitHandshake(_) => {
-                match pkt.kind() {
-                    PacketType::ClientHandshake => {
-                        if let Ok(inner_pkt) = ClientHandshakePacket::from_packet(&pkt) {
-                            let mut chal: [u8; CHALLENGE_LEN] = Default::default();
-                            chal.copy_from_slice(&inner_pkt.challenge);
-                            self.add_remote_key(&inner_pkt.public_key, &inner_pkt.nonce);
-                            self.remote_auth = AuthKeyMaterial {
-                                challenge: Some(chal),
-                                public_key: None,
-                                signature: None,
-                                secret_key: None,
-                            };
-                            self.state = ConnectionState::ServerSendHandshake;
-                        }
-                    },
-                    _ => {
-                        self.reset_state(None);
-                        return Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()));
-                    },
-                }
+                self.recv_client_handshake(&pkt)
             },
 
             ConnectionState::ClientWaitHandshake(_t) => {
-                match pkt.kind() {
-                    PacketType::ServerHandshake => {
-                        let packet = ServerHandshakePacket::from_packet(&pkt);
-                        if packet.is_err() { // TODO: refactor
-                            self.reset_state(None);
-                            return Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()));
-                        }
-                        if let Ok(inner_pkt) = packet {
-                            self.add_remote_key(&inner_pkt.public_key, &inner_pkt.nonce);
-                            let mut plaintext: [u8; SERVER_HANDSHAKE_SUBPACKET_LEN] = [0u8; SERVER_HANDSHAKE_SUBPACKET_LEN];
-                            let session = match self.local_key.session {
-                                Some(ref s) => s.as_bytes(),
-                                _ => {
-                                    self.reset_state(None);
-                                    return Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()));
-                                }
-                            };
-                            let nonce = match self.remote_key {
-                                Some(ref k) => k.nonce,
-                                _ => {
-                                    self.reset_state(None);
-                                    return Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()));
-                                }
-                            };
-                            // note: pt is consumed by decrypt_to_bytes
-                            match decrypt_to_bytes(session, &nonce, &inner_pkt.subpacket, &mut plaintext) {
-                                Ok(_) => {},
-                                Err(e) => {
-                                    self.reset_state(None);
-                                    return Err(e);
-                                }
-                            }
-                            if let Ok(enc_pkt) = ServerEncryptedHandshakePacket::from_bytes(&plaintext) {
-                                let mut chal: [u8; CHALLENGE_LEN] = [0u8; CHALLENGE_LEN];
-                                let mut sig: [u8; SIGNATURE_LEN] = [0u8; SIGNATURE_LEN];
-                                chal.copy_from_slice(&enc_pkt.challenge);
-                                sig.copy_from_slice(&enc_pkt.signature);
-                                let pubkey = match PublicKey::from_bytes(&enc_pkt.public_key) {
-                                    Ok(p) => p,
-                                    _ => {
-                                        self.reset_state(None);
-                                        return Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()));
-                                    }
-                                };
-                                let signature = match Signature::from_bytes(&sig) {
-                                    Ok(s) => s,
-                                    Err(_) => {
-                                        self.reset_state(None);
-                                        return Err(OssuaryError::InvalidSignature);
-                                    }
-                                };
-
-                                // All servers should have an auth key set, so
-                                // these parameters should be non-zero and the
-                                // signature should verify.
-                                if chal.iter().all(|x| *x == 0) ||
-                                    sig.iter().all(|x| *x == 0) ||
-                                    enc_pkt.public_key.iter().all(|x| *x == 0) {
-                                        // Parameters must be non-zero
-                                        self.reset_state(None);
-                                        return Err(OssuaryError::InvalidSignature);
-                                    }
-
-                                // This is the first encrypted message, so the nonce has not changed yet
-                                let mut sign_data = [0u8; KEY_LEN + NONCE_LEN + CHALLENGE_LEN];
-                                sign_data[0..KEY_LEN].copy_from_slice(self.remote_key.as_ref().map(|k| &k.public).unwrap_or(&[0u8; KEY_LEN]));
-                                sign_data[KEY_LEN..KEY_LEN+NONCE_LEN].copy_from_slice(self.remote_key.as_ref().map(|k| &k.nonce).unwrap_or(&[0u8; NONCE_LEN]));
-                                sign_data[KEY_LEN+NONCE_LEN..].copy_from_slice(&self.local_auth.challenge.unwrap_or([0u8; CHALLENGE_LEN]));
-                                match pubkey.verify(&sign_data, &signature) {
-                                    Ok(_) => {},
-                                    Err(_) => {
-                                        self.reset_state(None);
-                                        return Err(OssuaryError::InvalidSignature);
-                                    },
-                                }
-
-                                self.remote_auth = AuthKeyMaterial {
-                                    challenge: Some(chal),
-                                    public_key: Some(pubkey),
-                                    signature: Some(sig),
-                                    secret_key: None,
-                                };
-                                let _ = self.remote_key.as_mut().map(|k| increment_nonce(&mut k.nonce));
-
-                                match self.authorized_keys.contains(&enc_pkt.public_key) {
-                                    true => self.state = ConnectionState::ClientSendAuthentication,
-                                    false => self.state = ConnectionState::ClientRaiseUntrustedServer,
-                                }
-                            }
-                        }
-                    },
-                    _ => {
-                        self.reset_state(None);
-                        return Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()));
-                    },
-                }
+                self.recv_server_handshake(&pkt)
             },
 
             ConnectionState::ServerWaitAuthentication(_t) => {
-                match pkt.kind() {
-                    PacketType::ClientAuthentication => {
-                        let packet = ClientAuthenticationPacket::from_packet(&pkt);
-                        if packet.is_err() { // TODO: refactor
-                            self.reset_state(None);
-                            return Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()));
-                        }
-                        if let Ok(inner_pkt) = packet {
-                            let mut plaintext: [u8; CLIENT_AUTH_SUBPACKET_LEN] = [0u8; CLIENT_AUTH_SUBPACKET_LEN];
-                            let session = match self.local_key.session {
-                                Some(ref s) => s.as_bytes(),
-                                _ => {
-                                    self.reset_state(None);
-                                    return Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()));
-                                }
-                            };
-                            let nonce = match self.remote_key {
-                                Some(ref k) => k.nonce,
-                                _ => {
-                                    self.reset_state(None);
-                                    return Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()));
-                                }
-                            };
-                            // note: pt is consumed by decrypt_to_bytes
-                            match decrypt_to_bytes(session, &nonce, &inner_pkt.subpacket, &mut plaintext) {
-                                Ok(_) => {},
-                                Err(e) => {
-                                    self.reset_state(None);
-                                    return Err(e);
-                                }
-                            }
-                            if let Ok(enc_pkt) = ClientEncryptedAuthenticationPacket::from_bytes(&plaintext) {
-                                let mut sig: [u8; SIGNATURE_LEN] = [0u8; SIGNATURE_LEN];
-                                sig.copy_from_slice(&enc_pkt.signature);
-                                let pubkey = match PublicKey::from_bytes(&enc_pkt.public_key) {
-                                    Ok(p) => p,
-                                    _ => {
-                                        self.reset_state(None);
-                                        return Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()));
-                                    }
-                                };
-                                let challenge = self.local_auth.challenge.unwrap_or([0u8; CHALLENGE_LEN]);
-                                let signature = match Signature::from_bytes(&sig) {
-                                    Ok(s) => s,
-                                    Err(_) => {
-                                        self.reset_state(None);
-                                        return Err(OssuaryError::InvalidSignature);
-                                    }
-                                };
-                                match self.conn_type {
-                                    ConnectionType::AuthenticatedServer => {
-                                        if challenge.iter().all(|x| *x == 0) ||
-                                            sig.iter().all(|x| *x == 0) ||
-                                            enc_pkt.public_key.iter().all(|x| *x == 0) {
-                                                // Parameters must be non-zero
-                                                self.reset_state(None);
-                                                return Err(OssuaryError::InvalidSignature);
-                                        }
-
-                                        // This is the first encrypted message, so the nonce has not changed yet
-                                        let mut sign_data = [0u8; KEY_LEN + NONCE_LEN + CHALLENGE_LEN];
-                                        sign_data[0..KEY_LEN].copy_from_slice(self.remote_key.as_ref().map(|k| &k.public).unwrap_or(&[0u8; KEY_LEN]));
-                                        sign_data[KEY_LEN..KEY_LEN+NONCE_LEN].copy_from_slice(self.remote_key.as_ref().map(|k| &k.nonce).unwrap_or(&[0u8; NONCE_LEN]));
-                                        sign_data[KEY_LEN+NONCE_LEN..].copy_from_slice(&self.local_auth.challenge.unwrap_or([0u8; CHALLENGE_LEN]));
-                                        match pubkey.verify(&sign_data, &signature) {
-                                            Ok(_) => {},
-                                            Err(_) => {
-                                                self.reset_state(None);
-                                                return Err(OssuaryError::InvalidSignature);
-                                            },
-                                        }
-
-                                        // Ensure this key is permitted to connect
-                                        match self.authorized_keys.contains(&enc_pkt.public_key) {
-                                            true => {},
-                                            false => {
-                                                self.reset_state(None);
-                                                return Err(OssuaryError::InvalidKey);
-                                            },
-                                        }
-                                    }
-                                    _ => {},
-                                }
-                                self.remote_auth.signature = Some(sig);
-                                self.remote_auth.public_key = Some(pubkey);
-                                let _ = self.remote_key.as_mut().map(|k| increment_nonce(&mut k.nonce));
-                                self.state = ConnectionState::Encrypted;
-                            }
-                        }
-                    },
-                    _ => {
-                        self.reset_state(None);
-                        return Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()));
-                    },
-                }
+                self.recv_client_auth(&pkt)
             },
 
             ConnectionState::ResetWait => {
                 match pkt.kind() {
                     PacketType::Reset => {
                         self.remote_msg_id = 0;
-                        self.state = match self.conn_type {
-                            ConnectionType::Client => ConnectionState::ClientSendHandshake,
-                            _ => ConnectionState::ServerWaitHandshake(std::time::SystemTime::now()),
+                        match self.conn_type {
+                            ConnectionType::Client => Ok(ConnectionState::ClientSendHandshake),
+                            _ => Ok(ConnectionState::ServerWaitHandshake(std::time::SystemTime::now())),
                         }
                     },
-                    _ => {},
+                    _ => {
+                        Ok(self.state.clone())
+                    },
                 }
             }
         };
+        match res {
+            Ok(s) => self.state = s,
+            Err(e) => {
+                self.reset_state(None);
+                return Err(e);
+            }
+        }
         Ok(bytes_read)
     }
 
@@ -815,6 +614,225 @@ impl OssuaryConnection {
             },
             _ => Ok(false),
         }
+    }
+
+    /// Received packet, expecting ClientHandshake
+    fn recv_client_handshake(&mut self, pkt: &NetworkPacket) -> Result<ConnectionState, OssuaryError> {
+        match pkt.kind() {
+            PacketType::ClientHandshake => {
+                match ClientHandshakePacket::from_packet(&pkt) {
+                    Ok(inner_pkt) => {
+                        let mut chal: [u8; CHALLENGE_LEN] = Default::default();
+                        chal.copy_from_slice(&inner_pkt.challenge);
+                        self.add_remote_key(&inner_pkt.public_key, &inner_pkt.nonce);
+                        self.remote_auth = AuthKeyMaterial {
+                            challenge: Some(chal),
+                            public_key: None,
+                            signature: None,
+                            secret_key: None,
+                        };
+                        Ok(ConnectionState::ServerSendHandshake)
+                    }
+                    _ => {
+                        Err(OssuaryError::InvalidPacket("Received invalid handshake packet.".into()))
+                    }
+                }
+            },
+            _ => {
+                Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()))
+            },
+        }
+    }
+
+    /// Received packet, expecting ServerHandshake
+    fn recv_server_handshake(&mut self, pkt: &NetworkPacket) -> Result<ConnectionState, OssuaryError> {
+        match pkt.kind() {
+            PacketType::ServerHandshake => {},
+            _ => {
+                return Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()));
+            }
+        }
+        let inner_pkt = match ServerHandshakePacket::from_packet(&pkt) {
+            Err(_) => {
+                return Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()));
+            },
+            Ok(p) => p,
+        };
+
+        self.add_remote_key(&inner_pkt.public_key, &inner_pkt.nonce);
+        let mut plaintext: [u8; SERVER_HANDSHAKE_SUBPACKET_LEN] = [0u8; SERVER_HANDSHAKE_SUBPACKET_LEN];
+        let session = match self.local_key.session {
+            Some(ref s) => s.as_bytes(),
+            _ => {
+                return Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()));
+            }
+        };
+        let nonce = match self.remote_key {
+            Some(ref k) => k.nonce,
+            _ => {
+                return Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()));
+            }
+        };
+        // note: pt is consumed by decrypt_to_bytes
+        match decrypt_to_bytes(session, &nonce, &inner_pkt.subpacket, &mut plaintext) {
+            Ok(_) => {},
+            Err(e) => {
+                return Err(e);
+            }
+        }
+
+        let enc_pkt = match ServerEncryptedHandshakePacket::from_bytes(&plaintext) {
+            Err(e) => {
+                return Err(e);
+            }
+            Ok(p) => p,
+        };
+
+        let mut chal: [u8; CHALLENGE_LEN] = [0u8; CHALLENGE_LEN];
+        let mut sig: [u8; SIGNATURE_LEN] = [0u8; SIGNATURE_LEN];
+        chal.copy_from_slice(&enc_pkt.challenge);
+        sig.copy_from_slice(&enc_pkt.signature);
+        let pubkey = match PublicKey::from_bytes(&enc_pkt.public_key) {
+            Ok(p) => p,
+            _ => {
+                return Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()));
+            }
+        };
+        let signature = match Signature::from_bytes(&sig) {
+            Ok(s) => s,
+            Err(_) => {
+                return Err(OssuaryError::InvalidSignature);
+            }
+        };
+
+        // All servers should have an auth key set, so
+        // these parameters should be non-zero and the
+        // signature should verify.
+        if chal.iter().all(|x| *x == 0) ||
+            sig.iter().all(|x| *x == 0) ||
+            enc_pkt.public_key.iter().all(|x| *x == 0) {
+                // Parameters must be non-zero
+                return Err(OssuaryError::InvalidSignature);
+            }
+
+        // This is the first encrypted message, so the nonce has not changed yet
+        let mut sign_data = [0u8; KEY_LEN + NONCE_LEN + CHALLENGE_LEN];
+        sign_data[0..KEY_LEN].copy_from_slice(self.remote_key.as_ref().map(|k| &k.public).unwrap_or(&[0u8; KEY_LEN]));
+        sign_data[KEY_LEN..KEY_LEN+NONCE_LEN].copy_from_slice(&nonce);
+        sign_data[KEY_LEN+NONCE_LEN..].copy_from_slice(&self.local_auth.challenge.unwrap_or([0u8; CHALLENGE_LEN]));
+        match pubkey.verify(&sign_data, &signature) {
+            Ok(_) => {},
+            Err(_) => {
+                return Err(OssuaryError::InvalidSignature);
+            },
+        }
+
+        self.remote_auth = AuthKeyMaterial {
+            challenge: Some(chal),
+            public_key: Some(pubkey),
+            signature: Some(sig),
+            secret_key: None,
+        };
+        let _ = self.remote_key.as_mut().map(|k| increment_nonce(&mut k.nonce));
+
+        match self.authorized_keys.contains(&enc_pkt.public_key) {
+            true => Ok(ConnectionState::ClientSendAuthentication),
+            false => Ok(ConnectionState::ClientRaiseUntrustedServer),
+        }
+    }
+
+    /// Received packet, expecting ClientAuthentication
+    fn recv_client_auth(&mut self, pkt: &NetworkPacket) -> Result<ConnectionState, OssuaryError> {
+        match pkt.kind() {
+            PacketType::ClientAuthentication => {},
+            _ => {
+                return Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()));
+            },
+        }
+        let inner_pkt = match ClientAuthenticationPacket::from_packet(&pkt) {
+            Ok(p) => p,
+            Err(_) => {
+                return Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()));
+            },
+        };
+
+        let mut plaintext: [u8; CLIENT_AUTH_SUBPACKET_LEN] = [0u8; CLIENT_AUTH_SUBPACKET_LEN];
+        let session = match self.local_key.session {
+            Some(ref s) => s.as_bytes(),
+            _ => {
+                return Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()));
+            }
+        };
+        let nonce = match self.remote_key {
+            Some(ref k) => k.nonce,
+            _ => {
+                return Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()));
+            }
+        };
+        // note: pt is consumed by decrypt_to_bytes
+        match decrypt_to_bytes(session, &nonce, &inner_pkt.subpacket, &mut plaintext) {
+            Ok(_) => {},
+            Err(e) => {
+                return Err(e);
+            }
+        }
+
+        let enc_pkt = match ClientEncryptedAuthenticationPacket::from_bytes(&plaintext) {
+            Ok(p) => p,
+            Err(e) => {
+                return Err(e);
+            },
+        };
+        let mut sig: [u8; SIGNATURE_LEN] = [0u8; SIGNATURE_LEN];
+        sig.copy_from_slice(&enc_pkt.signature);
+        let pubkey = match PublicKey::from_bytes(&enc_pkt.public_key) {
+            Ok(p) => p,
+            _ => {
+                return Err(OssuaryError::InvalidPacket("Received unexpected handshake packet.".into()));
+            }
+        };
+        match self.conn_type {
+            ConnectionType::AuthenticatedServer => {
+                let challenge = self.local_auth.challenge.unwrap_or([0u8; CHALLENGE_LEN]);
+                let signature = match Signature::from_bytes(&sig) {
+                    Ok(s) => s,
+                    Err(_) => {
+                        return Err(OssuaryError::InvalidSignature);
+                    }
+                };
+                if challenge.iter().all(|x| *x == 0) ||
+                    sig.iter().all(|x| *x == 0) ||
+                    enc_pkt.public_key.iter().all(|x| *x == 0) {
+                        // Parameters must be non-zero
+                        return Err(OssuaryError::InvalidSignature);
+                    }
+
+                // This is the first encrypted message, so the nonce has not changed yet
+                let mut sign_data = [0u8; KEY_LEN + NONCE_LEN + CHALLENGE_LEN];
+                sign_data[0..KEY_LEN].copy_from_slice(self.remote_key.as_ref().map(|k| &k.public).unwrap_or(&[0u8; KEY_LEN]));
+                sign_data[KEY_LEN..KEY_LEN+NONCE_LEN].copy_from_slice(&nonce);
+                sign_data[KEY_LEN+NONCE_LEN..].copy_from_slice(&challenge);
+                match pubkey.verify(&sign_data, &signature) {
+                    Ok(_) => {},
+                    Err(_) => {
+                        return Err(OssuaryError::InvalidSignature);
+                    },
+                }
+
+                // Ensure this key is permitted to connect
+                match self.authorized_keys.contains(&enc_pkt.public_key) {
+                    true => {},
+                    false => {
+                        return Err(OssuaryError::InvalidKey);
+                    },
+                }
+            }
+            _ => {},
+        }
+        self.remote_auth.signature = Some(sig);
+        self.remote_auth.public_key = Some(pubkey);
+        let _ = self.remote_key.as_mut().map(|k| increment_nonce(&mut k.nonce));
+        Ok(ConnectionState::Encrypted)
     }
 }
 

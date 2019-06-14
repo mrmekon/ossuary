@@ -363,7 +363,7 @@ struct PacketHeader {
 }
 
 /// Internal state of OssuaryConnection state machine.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum ConnectionState {
     /// Server is waiting for handshake packet from a client
     ///
