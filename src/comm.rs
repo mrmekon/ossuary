@@ -235,20 +235,7 @@ impl OssuaryConnection {
         match read_packet(self, in_buf) {
             Ok((pkt, bytes)) => {
                 bytes_read += bytes;
-                if pkt.header.msg_id != self.remote_msg_id {
-                    match pkt.kind() {
-                        PacketType::Disconnect |
-                        PacketType::Reset => {},
-                        _ => {
-                            let msg_id = pkt.header.msg_id;
-                            println!("Message gap detected.  Restarting connection. ({} != {})",
-                                     msg_id, self.remote_msg_id);
-                            self.reset_state(None);
-                            return Err(OssuaryError::InvalidPacket("Message ID mismatch".into()))
-                        },
-                    }
-                }
-                self.remote_msg_id = pkt.header.msg_id + 1;
+                self.remote_msg_id = self.next_msg_id(&pkt)?;
 
                 match pkt.kind() {
                     PacketType::Reset => {
