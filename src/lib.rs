@@ -246,7 +246,7 @@ pub use error::OssuaryError;
 
 use chacha20_poly1305_aead::{encrypt,decrypt};
 use x25519_dalek::{EphemeralSecret, PublicKey as EphemeralPublic, SharedSecret};
-use ed25519_dalek::{Signature, Keypair, SecretKey, PublicKey};
+use ed25519_dalek::{Signature, Keypair, SecretKey, ExpandedSecretKey, PublicKey};
 
 use rand::rngs::OsRng;
 
@@ -286,7 +286,7 @@ impl NetworkPacket {
 
 /// The packet types used by the Ossuary protocol.
 #[repr(u16)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub(crate) enum PacketType {
     /// Should never be encountered.
     Unknown = 0x00,
@@ -363,7 +363,7 @@ struct PacketHeader {
 }
 
 /// Internal state of OssuaryConnection state machine.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 enum ConnectionState {
     /// Server is waiting for handshake packet from a client
     ///
@@ -572,12 +572,6 @@ pub fn generate_auth_keypair() -> Result<([u8; KEY_LEN],[u8; KEY_LEN]), OssuaryE
     Ok((keypair.secret.to_bytes(), keypair.public.to_bytes()))
 }
 
-/// Cast the data bytes in a NetworkPacket into a struct
-fn interpret_packet<'a, T>(pkt: &'a NetworkPacket) -> Result<&'a T, OssuaryError> {
-    let s: &T = slice_as_struct(&pkt.data)?;
-    Ok(s)
-}
-
 fn increment_nonce(nonce: &mut [u8]) -> bool {
     let wrapped = nonce.iter_mut().rev().fold(1, |acc, x| {
         let (val,carry) = x.overflowing_add(acc);
@@ -587,14 +581,23 @@ fn increment_nonce(nonce: &mut [u8]) -> bool {
     wrapped != 0
 }
 
+/// Cast the data bytes in a NetworkPacket into a struct
+#[inline(always)]
+fn interpret_packet<'a, T>(pkt: &'a NetworkPacket) -> Result<&'a T, OssuaryError> {
+    let s: &T = slice_as_struct(&pkt.data)?;
+    Ok(s)
+}
+
 /// Cast the data bytes in a NetworkPacket into a struct, and also return the
 /// remaining unused bytes if the data is larger than the struct.
+#[inline(always)]
 fn interpret_packet_extra<'a, T>(pkt: &'a NetworkPacket)
                                  -> Result<(&'a T, &'a [u8]), OssuaryError> {
     let s: &T = slice_as_struct(&pkt.data)?;
     Ok((s, &pkt.data[::std::mem::size_of::<T>()..]))
 }
 
+#[inline(always)]
 fn struct_as_slice<T: Sized>(p: &T) -> &[u8] {
     unsafe {
         ::std::slice::from_raw_parts(
@@ -603,6 +606,7 @@ fn struct_as_slice<T: Sized>(p: &T) -> &[u8] {
         )
     }
 }
+#[inline(always)]
 fn slice_as_struct<T>(p: &[u8]) -> Result<&T, OssuaryError> {
     unsafe {
         if p.len() < ::std::mem::size_of::<T>() {

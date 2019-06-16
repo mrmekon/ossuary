@@ -111,8 +111,8 @@ where T: std::ops::DerefMut<Target = U>,
 ///
 /// On success, returns the number of bytes written to the output buffer.
 pub(crate) fn write_packet<T,U>(conn: &mut OssuaryConnection,
-                     stream: &mut T, data: &[u8],
-                     kind: PacketType) -> Result<usize, OssuaryError>
+                                stream: &mut T, data: &[u8],
+                                kind: PacketType) -> Result<usize, OssuaryError>
 where T: std::ops::DerefMut<Target = U>,
       U: std::io::Write {
     let msg_id = conn.local_msg_id as u16;
