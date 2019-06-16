@@ -20,7 +20,9 @@ maintenance = { status = "actively-developed" }
 crate_type = ["lib", "cdylib", "staticlib"]
 
 [profile.release]
-opt-level = "z"
+# Note: opt-level "z" makes it 40% slower and 5% smaller
+# opt-level "3" makes it 5% faster and 80% larger
+opt-level = "s"
 debug = false
 rpath = false
 lto = true
