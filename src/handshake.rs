@@ -16,6 +16,7 @@
 use crate::*;
 
 use comm::{read_packet, write_packet, write_stored_packet};
+//use error::OssuaryResult;
 
 use std::io::Write;
 
@@ -288,7 +289,7 @@ impl OssuaryConnection {
     where T: std::ops::DerefMut<Target = U>,
           U: std::io::Write {
         // Try to send any unsent buffered data
-        match write_stored_packet(self, &mut buf) {
+        match write_stored_packet(self, buf.deref_mut()) {
             Ok(w) if w == 0 => {},
             Ok(w) => return Err(OssuaryError::WouldBlock(w)),
             Err(e) => return Err(e),
@@ -341,7 +342,7 @@ impl OssuaryConnection {
           U: std::io::Write {
         // Tell remote host to reset
         let pkt: ResetPacket = Default::default();
-        let w = write_packet(self, &mut buf, struct_as_slice(&pkt),
+        let w = write_packet(self, buf.deref_mut(), struct_as_slice(&pkt),
                              PacketType::Reset)?;
         self.local_msg_id = 0;
         let state = match initial {
@@ -361,7 +362,7 @@ impl OssuaryConnection {
             OssuaryError::ConnectionClosed => ResetPacket::closed(),
             _ => Default::default(),
         };
-        let w = write_packet(self, &mut buf, struct_as_slice(&pkt),
+        let w = write_packet(self, buf.deref_mut(), struct_as_slice(&pkt),
                              PacketType::Disconnect)?;
         Ok((w, ConnectionState::Failed(e)))
     }
@@ -375,7 +376,7 @@ impl OssuaryConnection {
         let pkt = ClientHandshakePacket::new(&self.local_key.public,
                                              &self.local_key.nonce,
                                              &chal);
-        let w = write_packet(self, &mut buf, struct_as_slice(&pkt),
+        let w = write_packet(self, buf.deref_mut(), struct_as_slice(&pkt),
                              PacketType::ClientHandshake)?;
         let state = ConnectionState::ClientWaitHandshake(std::time::SystemTime::now());
         Ok((w, state))
@@ -396,7 +397,7 @@ impl OssuaryConnection {
                                              server_public.as_bytes(),
                                              &chal,
                                              &sig)?;
-        let w = write_packet(self, &mut buf, struct_as_slice(&pkt),
+        let w = write_packet(self, buf.deref_mut(), struct_as_slice(&pkt),
                              PacketType::ServerHandshake)?;
         increment_nonce(&mut self.local_key.nonce);
         let state = ConnectionState::ServerWaitAuthentication(std::time::SystemTime::now());
@@ -415,7 +416,7 @@ impl OssuaryConnection {
                                                   session,
                                                   server_public.as_bytes(),
                                                   &sig)?;
-        let w = write_packet(self, &mut buf, struct_as_slice(&pkt),
+        let w = write_packet(self, buf.deref_mut(), struct_as_slice(&pkt),
                              PacketType::ClientAuthentication)?;
         increment_nonce(&mut self.local_key.nonce);
         let state = ConnectionState::Encrypted;
@@ -468,29 +469,8 @@ impl OssuaryConnection {
         };
 
         match pkt.kind() {
-            PacketType::Reset => {
-                match self.state {
-                    ConnectionState::ResetWait => {},
-                    _ => {
-                        self.reset_state(None);
-                        self.state = ConnectionState::Resetting(false);
-                        return Err(OssuaryError::ConnectionReset(bytes_read));
-                    }
-                }
-            },
-            PacketType::Disconnect => {
-                let rs_pkt = interpret_packet::<ResetPacket>(&pkt)?;
-                match rs_pkt.error {
-                    true => {
-                        self.reset_state(Some(OssuaryError::ConnectionFailed));
-                        return Err(OssuaryError::ConnectionFailed);
-                    },
-                    false => {
-                        self.reset_state(Some(OssuaryError::ConnectionClosed));
-                        return Err(OssuaryError::ConnectionClosed);
-                    },
-                }
-            },
+            PacketType::Reset => { self.handle_reset_packet(bytes_read)?; },
+            PacketType::Disconnect => { self.handle_disconnect_packet(&pkt)?; },
             _ => {},
         }
 
@@ -548,6 +528,8 @@ impl OssuaryConnection {
             },
             Err(e) => {
                 self.reset_state(None);
+                // bytes_read not returned on error, but will be consumed again
+                // when the handshake restarts.
                 Err(e)
             }
         }
@@ -699,6 +681,33 @@ impl OssuaryConnection {
                 exp_key.sign(&sign_data, &server_public).to_bytes()
             },
             None => [0; SIGNATURE_LEN],
+        }
+    }
+
+    pub(crate) fn handle_reset_packet(&mut self, bytes_read: usize) -> Result<usize, OssuaryError> {
+        match self.state {
+            ConnectionState::ResetWait => {
+                Ok(0)
+            },
+            _ => {
+                self.reset_state(None);
+                self.state = ConnectionState::Resetting(false);
+                Err(OssuaryError::ConnectionReset(bytes_read))
+            }
+        }
+    }
+
+    pub(crate) fn handle_disconnect_packet(&mut self, pkt: &NetworkPacket) -> Result<usize, OssuaryError> {
+        let rs_pkt = interpret_packet::<ResetPacket>(pkt)?;
+        match rs_pkt.error {
+            true => {
+                self.reset_state(Some(OssuaryError::ConnectionFailed));
+                Err(OssuaryError::ConnectionFailed)
+            },
+            false => {
+                self.reset_state(Some(OssuaryError::ConnectionClosed));
+                Err(OssuaryError::ConnectionClosed)
+            },
         }
     }
 }
