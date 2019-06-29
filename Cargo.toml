@@ -20,7 +20,9 @@ maintenance = { status = "actively-developed" }
 crate_type = ["lib", "cdylib", "staticlib"]
 
 [profile.release]
-opt-level = "z"
+# Note: opt-level "z" makes it 40% slower and 5% smaller
+# opt-level "3" makes it 5% faster and 80% larger
+opt-level = "s"
 debug = false
 rpath = false
 lto = true
@@ -32,6 +34,10 @@ overflow-checks = false
 
 [dependencies]
 x25519-dalek = "=0.5.2"
-ed25519-dalek = "=1.0.0-pre.1"
-chacha20-poly1305-aead = { version = "=0.1.2", features= ["simd", "simd_opt"] }
+ed25519-dalek = { version = "=1.0.0-pre.1" }
+chacha20-poly1305-aead = { version = "=0.1.2" }
 rand = "=0.6.5"
+
+[features]
+default = ["nightly"]
+nightly = ["chacha20-poly1305-aead/simd", "chacha20-poly1305-aead/simd_opt"]

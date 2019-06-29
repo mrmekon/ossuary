@@ -14,7 +14,6 @@
 // limitations under the License.
 //
 use crate::*;
-use crate::handshake::ResetPacket;
 
 use std::convert::TryInto;
 
@@ -74,10 +73,9 @@ where T: std::ops::DerefMut<Target = U>,
 /// the function responsible for putting all packets "on the wire".
 ///
 /// On success, returns the number of bytes written to the output buffer
-pub(crate) fn write_stored_packet<T,U>(conn: &mut OssuaryConnection,
-                            stream: &mut T) -> Result<usize, OssuaryError>
-where T: std::ops::DerefMut<Target = U>,
-      U: std::io::Write {
+pub(crate) fn write_stored_packet<T>(conn: &mut OssuaryConnection,
+                                     stream: &mut T) -> Result<usize, OssuaryError>
+where T: std::io::Write {
     let mut written = 0;
     while written < conn.write_buf_used {
         match stream.write(&conn.write_buf[written..conn.write_buf_used]) {
@@ -110,11 +108,10 @@ where T: std::ops::DerefMut<Target = U>,
 /// blocking library.
 ///
 /// On success, returns the number of bytes written to the output buffer.
-pub(crate) fn write_packet<T,U>(conn: &mut OssuaryConnection,
-                     stream: &mut T, data: &[u8],
-                     kind: PacketType) -> Result<usize, OssuaryError>
-where T: std::ops::DerefMut<Target = U>,
-      U: std::io::Write {
+pub(crate) fn write_packet<T>(conn: &mut OssuaryConnection,
+                                stream: &mut T, data: &[u8],
+                                kind: PacketType) -> Result<usize, OssuaryError>
+where T: std::io::Write {
     let msg_id = conn.local_msg_id as u16;
     conn.write_buf[0..2].copy_from_slice(&(data.len() as u16).to_be_bytes());
     conn.write_buf[2..4].copy_from_slice(&msg_id.to_be_bytes());
@@ -156,7 +153,7 @@ impl OssuaryConnection {
     where T: std::ops::DerefMut<Target = U>,
           U: std::io::Write {
         // Try to send any unsent buffered data
-        match write_stored_packet(self, &mut out_buf) {
+        match write_stored_packet(self, out_buf.deref_mut()) {
             Ok(w) if w == 0 => {},
             Ok(w) => return Err(OssuaryError::WouldBlock(w)),
             Err(e) => return Err(e),
@@ -195,7 +192,7 @@ impl OssuaryConnection {
         buf.extend(struct_as_slice(&pkt));
         buf.extend(&ciphertext);
         buf.extend(&tag);
-        let written = write_packet(self, &mut out_buf, &buf,
+        let written = write_packet(self, out_buf.deref_mut(), &buf,
                                    PacketType::EncryptedData)?;
         Ok(written)
     }
@@ -221,7 +218,6 @@ impl OssuaryConnection {
           U: std::io::Read,
           R: std::ops::DerefMut<Target = V>,
           V: std::io::Write {
-        let bytes_written: usize;
         let mut bytes_read: usize = 0;
         match self.state {
             ConnectionState::Failed(_) => { return Ok((0,0)); }
@@ -232,94 +228,65 @@ impl OssuaryConnection {
             }
         }
 
-        match read_packet(self, in_buf) {
-            Ok((pkt, bytes)) => {
-                bytes_read += bytes;
-                if pkt.header.msg_id != self.remote_msg_id {
-                    match pkt.kind() {
-                        PacketType::Disconnect |
-                        PacketType::Reset => {},
-                        _ => {
-                            let msg_id = pkt.header.msg_id;
-                            println!("Message gap detected.  Restarting connection. ({} != {})",
-                                     msg_id, self.remote_msg_id);
-                            self.reset_state(None);
-                            return Err(OssuaryError::InvalidPacket("Message ID mismatch".into()))
-                        },
-                    }
-                }
-                self.remote_msg_id = pkt.header.msg_id + 1;
+        let (pkt, bytes) = match read_packet(self, in_buf) {
+            Ok(t) => { t },
+            Err(e @ OssuaryError::WouldBlock(_)) => {
+                return Err(e);
+            }
+            Err(e) => {
+                self.reset_state(Some(e.clone()));
+                return Err(e);
+            }
+        };
+        bytes_read += bytes;
+        self.remote_msg_id = self.next_msg_id(&pkt)?;
 
-                match pkt.kind() {
-                    PacketType::Reset => {
-                        self.reset_state(None);
-                        self.state = ConnectionState::Resetting(false);
-                        return Err(OssuaryError::ConnectionReset(bytes_read));
-                    },
-                    PacketType::Disconnect => {
-                        let rs_pkt = interpret_packet::<ResetPacket>(&pkt)?;
-                        match rs_pkt.error {
-                            true => {
-                                self.reset_state(Some(OssuaryError::ConnectionFailed));
-                                return Err(OssuaryError::ConnectionFailed);
-                            },
-                            false => {
-                                self.reset_state(Some(OssuaryError::ConnectionClosed));
-                                return Err(OssuaryError::ConnectionClosed);
-                            },
-                        }
-                    },
-                    PacketType::EncryptedData => {
-                        match interpret_packet_extra::<EncryptedPacket>(&pkt) {
-                            Ok((data_pkt, rest)) => {
-                                let ciphertext = &rest[..data_pkt.data_len as usize];
-                                let tag = &rest[data_pkt.data_len as usize..];
-                                let aad = [];
-                                let mut plaintext = Vec::with_capacity(ciphertext.len());
-                                let session_key = match self.local_key.session {
-                                    Some(ref k) => k,
-                                    None => {
-                                        self.reset_state(None);
-                                        return Err(OssuaryError::InvalidKey);
-                                    }
-                                };
-                                let remote_nonce = match self.remote_key {
-                                    Some(ref rem) => rem.nonce,
-                                    None => {
-                                        self.reset_state(None);
-                                        return Err(OssuaryError::InvalidKey);
-                                    }
-                                };
-                                decrypt(session_key.as_bytes(),
-                                        &remote_nonce,
-                                        &aad, &ciphertext, &tag, &mut plaintext)?;
-                                bytes_written = match out_buf.write(&plaintext) {
-                                    Ok(w) => w,
-                                    Err(e) => return Err(e.into()),
-                                };
-                                let _ = self.remote_key.as_mut().map(|k| increment_nonce(&mut k.nonce));
-                            },
-                            Err(_) => {
-                                self.reset_state(None);
-                                return Err(OssuaryError::InvalidKey);
-                            },
-                        }
-                    },
-                    _ => {
-                        return Err(OssuaryError::InvalidPacket(
-                            "Received non-encrypted data on encrypted channel.".into()));
-                    },
-                }
+        let result: Result<usize, OssuaryError> = match pkt.kind() {
+            PacketType::Reset => {
+                 // return on error, since this resets the state in a special way
+                Ok(self.handle_reset_packet(bytes_read)?)
             },
-            Err(OssuaryError::WouldBlock(b)) => {
-                return Err(OssuaryError::WouldBlock(b));
+            PacketType::Disconnect => { self.handle_disconnect_packet(&pkt) },
+            PacketType::EncryptedData => { self.recv_encrypted_data(&pkt, out_buf.deref_mut()) },
+            _ => {
+                Err(OssuaryError::InvalidPacket(
+                    "Received non-encrypted data on encrypted channel.".into()))
             },
-            Err(_e) => {
+        };
+
+        match result {
+            Ok(bytes_written) => Ok((bytes_read, bytes_written)),
+            Err(e) => {
                 self.reset_state(None);
-                return Err(OssuaryError::InvalidPacket("Packet header did not parse.".into()));
-            },
+                // bytes_read not returned on error, but will be consumed again
+                // when the handshake restarts.
+                Err(e)
+            }
         }
-        Ok((bytes_read, bytes_written))
+    }
+
+    fn recv_encrypted_data<T>(&mut self, pkt: &NetworkPacket, out_buf: &mut T) -> Result<usize, OssuaryError>
+    where T: std::io::Write {
+        let (data_pkt, rest) = interpret_packet_extra::<EncryptedPacket>(&pkt)?;
+        let session_key = match &self.local_key.session {
+            Some(k) => k,
+            None => { return Err(OssuaryError::InvalidKey); },
+        };
+        let remote_nonce = self.remote_key.as_ref().map(|k| &k.nonce).unwrap_or(&[0u8; NONCE_LEN]);
+        let ciphertext = &rest[..data_pkt.data_len as usize];
+        let tag = &rest[data_pkt.data_len as usize..];
+        let aad = [];
+        let mut plaintext = Vec::with_capacity(ciphertext.len());
+        decrypt(session_key.as_bytes(),
+                remote_nonce,
+                &aad, &ciphertext, &tag, &mut plaintext)?;
+        match out_buf.write(&plaintext) {
+            Ok(w) => {
+                let _ = self.remote_key.as_mut().map(|k| increment_nonce(&mut k.nonce));
+                Ok(w)
+            },
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Write any cached encrypted data waiting to be sent
@@ -335,6 +302,6 @@ impl OssuaryConnection {
                       mut out_buf: R) -> Result<usize, OssuaryError>
     where R: std::ops::DerefMut<Target = V>,
           V: std::io::Write {
-        return write_stored_packet(self, &mut out_buf);
+        return write_stored_packet(self, out_buf.deref_mut());
     }
 }

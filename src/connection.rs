@@ -288,4 +288,24 @@ impl OssuaryConnection {
             Some(ref p) => Ok(p.as_bytes()),
         }
     }
+
+    pub(crate) fn next_msg_id(&mut self, pkt: &NetworkPacket) -> Result<u16, OssuaryError> {
+        if pkt.header.msg_id != self.remote_msg_id {
+            match pkt.kind() {
+                PacketType::Disconnect |
+                PacketType::Reset => {},
+                _ => {
+                    match self.state {
+                        ConnectionState::ResetWait => {},
+                        _ => {
+                            dbg!("Message gap detected.  Restarting connection.");
+                            self.reset_state(None);
+                            return Err(OssuaryError::InvalidPacket("Message ID does not match".into()));
+                        },
+                    }
+                },
+            }
+        }
+        Ok(pkt.header.msg_id + 1)
+    }
 }

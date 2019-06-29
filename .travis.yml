@@ -16,3 +16,13 @@ osx_image: xcode8.3
 install:
 - curl https://static.rust-lang.org/rustup.sh |
     sh -s -- --prefix=$HOME/rust
+script:
+  - cargo build --verbose
+  - cargo build --release --verbose
+  - cargo test --verbose -- --nocapture
+  - cargo bench --verbose -- --nocapture
+  - mkdir -p examples/build/
+  - cd examples/build/
+  - cmake ..
+  - make
+  - ./ffi

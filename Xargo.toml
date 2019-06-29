@@ -8,15 +8,4 @@
 # Only works with nightly.
 #
 [dependencies]
-std = {default-features=false, features=["panic_immediate_abort"]}
-
-[profile.release]
-panic = "abort"
-opt-level = "z"
-debug = false
-rpath = false
-lto = true
-debug-assertions = false
-codegen-units = 1
-incremental = true
-overflow-checks = false
+std = {default-features=false, features=["panic_immediate_abort"] }

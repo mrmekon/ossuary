@@ -13,7 +13,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-#[derive(Clone, PartialEq)]
+
+#[derive(Clone)]
+#[cfg_attr(debug_assertions, derive(PartialEq))] // for tests
 /// Error produced by Ossuary or one of its dependencies
 ///
 /// The most important errors that all programs must explicitly consider are:
@@ -110,7 +112,7 @@ pub enum OssuaryError {
     /// The associated string may describe the problem that went wrong.  This
     /// might be encountered if packets are duplicated, dropped, or corrupted.
     /// It typically indicates an internal error, and the connection will reset.
-    InvalidPacket(String),
+    InvalidPacket(&'static str),
 
     /// Error casting a received packet to an internal struct format.
     ///
