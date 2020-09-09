@@ -52,13 +52,8 @@ where T: std::ops::DerefMut<Target = U>,
     let buf: Box<[u8]> = (&conn.read_buf[header_size..header_size+packet_len])
         .to_vec().into_boxed_slice();
     let excess = conn.read_buf_used - header_size - packet_len;
-    unsafe {
-        // no safe way to memmove() in Rust?
-        std::ptr::copy::<u8>(
-            conn.read_buf.as_ptr().offset((header_size + packet_len) as isize),
-            conn.read_buf.as_mut_ptr(),
-            excess);
-    }
+    let start = header_size + packet_len;
+    conn.read_buf.copy_within(start..start + excess, 0);
     conn.read_buf_used = excess;
     Ok((NetworkPacket {
         header: hdr,
@@ -84,13 +79,8 @@ where T: std::io::Write {
             },
             Err(e) => {
                 if written > 0 && written < conn.write_buf_used {
-                    unsafe {
-                        // no safe way to memmove() in Rust?
-                        std::ptr::copy::<u8>(
-                            conn.write_buf.as_ptr().offset(written as isize),
-                            conn.write_buf.as_mut_ptr(),
-                            conn.write_buf_used - written);
-                    }
+                    conn.write_buf
+                        .copy_within(written..written + conn.write_buf_used, 0);
                 }
                 conn.write_buf_used -= written;
                 return Err(e.into());
@@ -171,7 +161,7 @@ impl OssuaryConnection {
             Some(ref k) => k,
             None => {
                 self.reset_state(None);
-                return Err(OssuaryError::InvalidKey);;
+                return Err(OssuaryError::InvalidKey);
             }
         };
         let tag = match encrypt(session_key.as_bytes(),
@@ -179,7 +169,7 @@ impl OssuaryConnection {
             Ok(t) => t,
             Err(_) => {
                 self.reset_state(None);
-                return Err(OssuaryError::InvalidKey);;
+                return Err(OssuaryError::InvalidKey);
             }
         };
         increment_nonce(&mut self.local_key.nonce);
